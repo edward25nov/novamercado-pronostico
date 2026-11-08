@@ -84,6 +84,28 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # --- Inicializador: corre una vez en cada `up` y termina. Aplica el esquema y carga los archivos
+  # publicados solo si cambiaron (D5). Usa la misma imagen que la API.
+  inicializador:
+    image: novamercado-api:0.1
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    command: ["python", "-m", "novamercado.inicializador"]
+    environment:
+      PRODUCTO_DB_HOST: db
+      PRODUCTO_DB_USUARIO: ${PRODUCTO_DB_USUARIO:?definir en .env}
+      PRODUCTO_DB_CLAVE: ${PRODUCTO_DB_CLAVE:?definir en .env}
+      PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      NOVAMERCADO_DATOS: /datos/publicados
+    volumes:
+      - ./datos/publicados:/datos/publicados:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   # --- API del servicio. Solo depende de la base: arranca aunque MLflow o Airflow no estén.
   api:
     build:
