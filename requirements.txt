@@ -1,13 +1,14 @@
 # Dependencias del producto. Las mismas versiones se instalan en la API, el inicializador y
-# la imagen de Airflow (Python 3.13) para que el modelo serializado cargue en todos lados.
+# la imagen de Airflow (Python 3.13). Las versiones de fastapi, pydantic, uvicorn, httpx y psycopg son
+# las que ya trae apache/airflow:3.3.2: instalarlas ahí no cambia nada de Airflow.
 pandas==3.0.5
 numpy==2.5.3
 scikit-learn==1.9.1
 mlflow-skinny==3.17.2
 skops==0.16.0
-pydantic==2.14.3
-fastapi==0.162.2
-uvicorn==0.54.0
-psycopg[binary]==3.3.8
+pydantic==2.13.5
+fastapi==0.136.3
+uvicorn==0.52.4
+psycopg[binary]==3.3.5
 httpx==0.28.1
 pyyaml==6.0.3
