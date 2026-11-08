@@ -8,3 +8,4 @@ __pycache__/
 # Archivos publicados por el equipo docente: se colocan aquí, nunca van a Git
 /datos/publicados/*
 !/datos/publicados/.gitkeep
+/.cache/
