@@ -99,8 +99,11 @@ services:
       PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
       MLFLOW_TRACKING_URI: http://mlflow:5000
       NOVAMERCADO_DATOS: /datos/publicados
+      OMP_NUM_THREADS: 4
     volumes:
       - ./datos/publicados:/datos/publicados:ro
+    # No depende de mlflow en el compose: lo espera en el código, y en los arranques siguientes no
+    # lo necesita (estado_producto), así un reinicio con MLflow caído no falla.
     depends_on:
       db:
         condition: service_healthy
