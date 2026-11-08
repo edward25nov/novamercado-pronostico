@@ -116,3 +116,11 @@ CREATE TABLE IF NOT EXISTS reentrenamientos (
     metricas       jsonb,
     terminado_en   timestamptz
 );
+
+-- Hitos del producto (p. ej. que el primer modelo ya se registró), para no repetir trabajo al
+-- volver a levantar aunque MLflow no responda en ese momento.
+CREATE TABLE IF NOT EXISTS estado_producto (
+    clave           text PRIMARY KEY,
+    valor           text NOT NULL,
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);

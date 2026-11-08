@@ -14,7 +14,7 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D2. Los archivos publicados van en `datos/publicados/`, fuera de Git y en solo lectura — *vigente*
   - D3. Versiones fijas y las mismas dependencias en la API, el inicializador y Airflow — *vigente*
   - D4. Puerto de MLflow en el anfitrión configurable, 5000 por defecto — *vigente*
-  - D5. Un inicializador idempotente prepara el producto desde cero — *vigente para la carga (F2); entrenamiento en F3*
+  - D5. Un inicializador idempotente prepara el producto desde cero — *vigente*
   - D18. La API solo depende de la base de datos para arrancar — *vigente*
   - D19. La API habla con Airflow por su API REST v2 con el usuario de `.env` — *vigente (F1), se usa en F6*
 - **Persistencia**
@@ -29,9 +29,12 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D11. Números con coma: gana la interpretación que da un entero — *propuesta (F4)*
   - D12. Fechas: nunca el reloj del sistema; rango válido según los datos — *propuesta (F4)*
 - **Modelo**
-  - D13. Información que usa el modelo al predecir — *propuesta (F3)*
-  - D14. Cantidad sugerida: newsvendor por familia, calibrada por costo — *propuesta (F3)*
+  - D13. Información que usa el modelo al predecir — *vigente*
+  - D14. Cantidad sugerida: newsvendor por familia, calibrada por costo — *vigente*
   - D15. Criterio de reemplazo del modelo vigente — *propuesta (F6)*
+  - D22. Validación temporal común y escalera de modelos — *vigente*
+  - D23. Guardas numéricas del modelo — *vigente*
+  - D24. Qué se registra en MLflow y cómo se empaqueta el modelo — *vigente*
 - **Operación**
   - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *propuesta (F6)*
   - D17. Recarga del modelo en caliente, caché local y monitor de salud — *propuesta (F5)*
@@ -135,6 +138,22 @@ indicada y se actualiza con números medidos en ese mismo PR.
   hechos; que una fila falte en una nueva publicación es más probable que sea un archivo incompleto
   que una venta que no ocurrió, y borrarla cambiaría en silencio los datos de entrenamiento y las
   variables de predicción. Las filas actualizadas marcan `actualizado_en`.
+- **Primer modelo (F3):** tras la carga, garantiza que exista `@champion`. **MLflow es la fuente de
+  verdad**; la marca en `estado_producto` solo evita depender de él cuando no responde:
+  - champion existe → nada que hacer;
+  - no hay champion pero sí una versión con `origen=inicializador` (el proceso murió entre registrar y
+    promover) → se promueve esa versión, sin reentrenar ni dejar versiones huérfanas;
+  - no hay ninguna versión (primer arranque, o se perdió el volumen de MLflow aunque la base siga) →
+    se entrena la escalera, se registra y se promueve;
+  - MLflow no responde → con marca, termina bien (hubo modelo y la API usa su caché, D17) tras 4
+    intentos; sin marca, espera hasta 3 minutos y si no, falla.
+- **Medido (F3):** desde cero, el inicializador termina 47 s después del `up` (carga 0,5 s;
+  escalera y registro 38 s) con `novamercado-ventas` v1 en `@champion` (costo en validación 369 741,
+  WAPE 0.1797, los mismos números que fuera de Docker). Segundo arranque: "modelo inicial ya
+  registrado (versión 1)" en 0,0 s. Sigue habiendo una sola versión en el Registry. Casos de falla
+  (revisión del PR #4): sin alias y con la v1 registrada, la promueve en 2 s sin reentrenar; con el
+  volumen de MLflow borrado y la base intacta, reentrena y promueve en 40 s; con MLflow detenido,
+  termina bien en 11 s informando que el modelo ya se había registrado.
 - **No bloquea a la API:** la API no depende del inicializador (D18); si este fallara, la API
   arranca igual y responde 503 `sin_modelo` en `/health` (el motivo todavía no dice por qué no hay
   modelo; en F3/F5 el motivo indicará si falló la inicialización o si el primer modelo está en
@@ -308,22 +327,103 @@ actualiza en el mismo PR que cambie una regla.
 ## Modelo
 
 ### D13. Información que usa el modelo al predecir
-- **Propuesta:** para la fecha *d* solo se usan ventas de fechas anteriores a *d*: rezagos y medias
-  móviles (1, 7, 14, 28 días) por tienda y familia; el `en_promocion` de la solicitud; tipo y ciudad
-  de la tienda; familia; día de la semana y del mes; feriados nacionales y locales (el `ambito`
-  coincide con la ciudad de la tienda), fechas comerciales y de pago con su distancia; y la quincena
-  (días 15 y último del mes) derivada del calendario.
+- **Decisión:** para la fila (tienda, familia, *d*) el modelo usa (`src/novamercado/modelo/variables.py`):
+  - **Ventas pasadas** (solo fechas < *d*, sobre una grilla diaria completa por serie): rezagos de 1, 2,
+    7, 14, 21 y 28 días; medias de 7 y 28 días; media del mismo día de la semana en 4 semanas;
+    desviación de 28 días; días desde el último dato; promoción del día anterior.
+  - **La solicitud:** `en_promocion` del día.
+  - **Catálogos:** tienda, familia y tipo de tienda (categóricas).
+  - **Calendario** (se conoce de antemano): día de la semana, del mes y del año, mes, días al fin de
+    mes, quincena (días 15 y último del mes), marcas por tipo de evento de `feriados.csv` (feriado,
+    medio día, comercial, pago; los locales solo para las tiendas cuya ciudad coincide con el
+    `ambito`), el evento por nombre (categórica) y la distancia en días al evento más cercano (±7).
+- **Modelo de producción:** `HistGradientBoostingRegressor` global (pérdida Poisson, lr 0.05, 600
+  árboles, 31 hojas) que predice **ventas / nivel**, donde el nivel es la media de 28 días de la
+  serie, y con los rezagos y medias **también divididos entre el nivel** (modelo "sin escala").
+- **Alternativas** (`docs/comparacion_modelos.md`, mismas 4 ventanas de 28 días):
+
+  | Modelo | WAPE | Costo | Sesgo con +25 % de demanda sin reentrenar |
+  |---|---|---|---|
+  | baseline (mismo día, 4 semanas) | 0.267 | 543 415 | −2 a −4 % |
+  | GBM directo (ventas en unidades) | 0.180 | 371 454 | −9 a −16 % |
+  | GBM relativo con variables absolutas | 0.177 | 367 090 | −6 a −8 % |
+  | **GBM relativo sin escala** | 0.180 | 369 741 | **−2 a −2,5 %** |
+
+- **Justificación:** los tres GBM bajan el costo ~32 % frente al baseline. Entre ellos, el relativo
+  con variables absolutas es 0,7 % más barato con la demanda estable, pero los árboles no
+  extrapolan: si el nivel sube, las variables en unidades salen del rango visto y el pronóstico se
+  queda atrás (−6 a −8 %; el directo, −9 a −16 %). El enunciado anuncia cambios de demanda en el
+  periodo de evaluación y el reentrenamiento depende de cuándo lo pida el evaluador; el modelo sin
+  escala aprende patrones relativos y sigue al nivel en cuanto llegan las observaciones (−2 a −2,5 %
+  en el mismo escenario; con +40 %/−30 % en tres familias, ±3–4 % contra ±6–9 %). Se paga 0,7 % en
+  estabilidad por robustez. Variantes descartadas: pesos por recencia (vida media 180 días, +0,6 %
+  de costo), lr 0.03 con 1 000 árboles (−0,3 %, el doble de tiempo), hojas mínimas de 100 (+0,1 %).
+- **Huecos en las observaciones** (medido en la revisión del PR #4, entrenado hasta 2026-01-31 y
+  prediciendo febrero): si falta la venta de ayer, el sin escala pasa de WAPE 0.1740 a 0.1766 (sesgo
+  −0,5 % → −1,2 %); con tres días faltantes, 0.1872. El directo pasa de 0.1715 a 0.1815. El modelo
+  elegido tolera que una tienda no reporte algún día.
 - **Por qué la quincena aparte:** `feriados.csv` solo marca 6 fechas de pago (Bono 14 y aguinaldo),
   pero las ventas suben el 15 (índice 1.17) y a fin de mes (1.36 el día 31).
-- **Por qué un nivel reciente:** las ventas crecen 10.3 % al año (mediana interanual) y el periodo de
-  evaluación puede traer cambios de demanda; se comparará en F3 un objetivo relativo al nivel de los
-  últimos 28 días contra el objetivo directo.
 
 ### D14. Cantidad sugerida: newsvendor por familia, calibrada por costo
-- **Propuesta:** `cantidad_sugerida = ceil(venta_esperada × k_f)`, con un factor k_f por familia
-  elegido en validación minimizando el costo de `costos.csv`. La justificación teórica es el cuantil
-  crítico τ_f (`docs/perfil_datos.md`): de 0.29 en panadería (sugerir por debajo) a 0.95 en licores
-  (sugerir por encima). Los factores viajan con la versión del modelo.
+- **Decisión:** `cantidad_sugerida = ceil(venta_esperada × k_f)`, con un factor por familia k_f
+  elegido entre 0.50 y 2.50 (paso 0.01) minimizando el costo de `costos.csv` sobre las predicciones
+  fuera de muestra de las 4 ventanas. Los factores viajan dentro del modelo registrado (cambiar de
+  champion cambia predicción y factores juntos).
+- **Resultado (v1):** licores 1.53, limpieza 1.31, cuidado personal 1.30, bebé 1.30, mascotas 1.23,
+  bebidas 1.20, abarrotes 1.18, snacks 1.15, lácteos 0.94, carnes 0.93, frutas y verduras 0.90,
+  panadería 0.86: el orden sigue al cuantil crítico τ (0.95 en licores, 0.29 en panadería).
+- **Alternativas:** sugerir la venta esperada (k = 1); un factor por familia y tipo de tienda;
+  modelos de cuantiles por familia.
+- **Justificación:** con k = 1 el costo sería 481 068 contra 369 741 (−23 %). Por familia y tipo de
+  tienda mejora solo 0,2 % y triplica los parámetros. Elegir k con las mismas ventanas en que se
+  mide introduce un sesgo optimista pequeño: elegido solo con ventanas anteriores y aplicado a la
+  siguiente, el costo sube 0,8 % (280 719 contra 278 559), así que la cifra de validación es
+  representativa. Un modelo de cuantiles por familia exigiría 12 modelos más por reentrenamiento.
+
+### D22. Validación temporal común y escalera de modelos
+- **Decisión:** cuatro ventanas consecutivas de 28 días que terminan en la última fecha con ventas
+  (v1: del 2025-11-09 al 2026-02-28, incluye diciembre). Para cada ventana se entrena con las filas
+  anteriores a su inicio y se predice cada día con las ventas reales hasta el día anterior, como en
+  producción. Los cuatro modelos de la escalera (baseline, GBM directo, GBM relativo absoluto, GBM
+  sin escala) usan las mismas filas y quedan como runs anidados de una tanda en MLflow, con
+  métricas totales y por ventana, costo por familia y factores. El de producción es fijo (D13); los
+  otros son la referencia de cada reentrenamiento.
+- **Alternativas:** una sola ventana final; división aleatoria; elegir en cada tanda el de menor
+  costo.
+- **Justificación:** una sola ventana deja fuera diciembre (el mes con más variación: Navidad 0.32,
+  31 de diciembre 1.69); la división aleatoria filtra el futuro. Elegir el de menor costo en cada
+  tanda favorecería al relativo absoluto, que gana por 0,7 % en datos estables pero se queda atrás
+  ante un cambio de nivel, justo el riesgo que anuncia el enunciado.
+
+### D23. Guardas numéricas del modelo
+- **Decisión:** el modelo se entrena solo con filas cuya serie tiene nivel de 28 días (al menos 7
+  días con dato), el objetivo relativo se acota en 10, la predicción relativa se acota en 1,5 veces
+  el percentil 99,9 visto al entrenar y cualquier NaN o infinito se vuelve 0. Si una serie no tiene
+  historia, el nivel es la venta media de su familia en las tiendas del mismo tipo en los últimos 28
+  días de entrenamiento.
+- **Por qué (medido):** en las primeras filas de cada serie (p. ej. la apertura de la tienda 10) el
+  nivel era el mínimo de 1 y el objetivo relativo llegaba a 1 476. Con lr 0.1 la liga logarítmica
+  de Poisson desbordó y produjo predicciones del orden de 10^188. Con historia, el ratio real tiene
+  percentil 99,9 de 2,96 y máximo 4,7 (99 % de las filas); tras la corrección lr 0.1 da un costo
+  normal (370 242).
+
+### D24. Qué se registra en MLflow y cómo se empaqueta el modelo
+- **Decisión:** experimento `novamercado-ventas`; cada entrenamiento es un run padre `tanda-<fecha de
+  corte>` (linaje: filas, rango de fechas, suma y huella de las ventas usadas, filas que vienen de
+  observaciones, ventanas, commit, origen) con un run anidado por modelo de la escalera. El de
+  producción se registra como versión de `novamercado-ventas` (pyfunc que envuelve un
+  `Pronosticador`: modelo, codificación de categorías, factores e información del entrenamiento) con
+  tags de costo y WAPE de validación, fecha de corte, factores, run y tanda. El vigente es el alias
+  `champion`; al reemplazarlo, el anterior queda como `anterior`.
+- **Formato del artefacto:** `Pronosticador.version_formato` (también en `info` y como tag de la
+  versión). Si se agregan atributos, `__setstate__` completa los faltantes con valores por defecto
+  para que un champion registrado antes siga cargando y prediciendo (hay prueba).
+- **Serialización:** `pickle` estándar con las mismas versiones en todas las imágenes (D3); no
+  joblib, porque en el Lab 1 `dill` (que importa Airflow) alteraba su pickler.
+- **Alternativas:** `mlflow.sklearn` con el estimador solo (la API tendría que reconstruir aparte la
+  codificación y los factores, y un cambio de alias podría mezclar versiones); skops (no serializa
+  las clases propias sin una lista de tipos de confianza).
 
 ### D15. Criterio de reemplazo del modelo vigente
 - **Propuesta:** el retador se entrena con datos anteriores a una ventana común de validación (los
