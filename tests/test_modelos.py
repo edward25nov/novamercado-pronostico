@@ -45,3 +45,19 @@ def test_entrenar_y_pronosticador_guardado_predice_igual(tmp_path):
     despues = copia.predecir(v, obj, cat.tiendas, cat.feriados)
     pd.testing.assert_frame_equal(antes, despues)
     assert (despues["cantidad_sugerida"] >= 0).all() and despues["cantidad_sugerida"].dtype.kind == "i"
+
+
+def test_artefacto_de_formato_anterior_sigue_cargando():
+    """El estado de un pickle anterior, sin los atributos agregados después (info, version_formato),
+    se completa con valores por defecto y el Pronosticador predice."""
+    cat = sinteticos.catalogos()
+    v = sinteticos.ventas()
+    p = T.entrenar(v, cat, n_ventanas=1).pronosticador
+    assert p.version_formato == 1 and p.info["version_formato"] == 1
+    estado_viejo = {k: val for k, val in p.__dict__.items() if k not in ("info", "version_formato")}
+    cargado = Pronosticador.__new__(Pronosticador)
+    cargado.__setstate__(estado_viejo)  # lo que hace pickle.load con un artefacto viejo
+    assert cargado.version_formato == 0 and cargado.info == {}
+    objetivo = pd.DataFrame({"tienda_id": [1], "familia_id": ["abarrotes"],
+                             "fecha": [v["fecha"].max() + pd.Timedelta(days=1)], "en_promocion": [1]})
+    assert cargado.predecir(v, objetivo, cat.tiendas, cat.feriados)["cantidad_sugerida"].iloc[0] >= 0

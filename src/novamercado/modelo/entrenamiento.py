@@ -11,6 +11,7 @@ import logging
 import os
 import tempfile
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from novamercado.modelo import costos as C
 from novamercado.modelo import evaluacion as E
 from novamercado.modelo import modelos as M
 from novamercado.modelo import variables as V
-from novamercado.modelo.pronosticador import ARCHIVO, EnvolturaPyfunc, Pronosticador
+from novamercado.modelo.pronosticador import ARCHIVO, VERSION_FORMATO, EnvolturaPyfunc, Pronosticador
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS)
         cantidad_sugerida=C.cantidad(p, sub["familia_id"].map(prod.factores).to_numpy()))
     info = {
         "modelo": PRODUCCION,
+        "version_formato": VERSION_FORMATO,
         "fecha_corte": str(ultima.date()),
         "ventanas_validacion": [str(v) for v in vs],
         "filas_entrenamiento": int(len(ventas)),
@@ -155,7 +157,9 @@ def registrar(res: Resultado, tracking_uri: str, origen: str, etiquetas: dict | 
                 _registrar_candidato(cand)
                 if nombre != PRODUCCION:
                     continue
-                with tempfile.TemporaryDirectory() as tmp:
+                with tempfile.TemporaryDirectory() as tmp, warnings.catch_warnings():
+                    # La envoltura no usa predict de pyfunc (ver EnvolturaPyfunc): sin firma a propósito.
+                    warnings.filterwarnings("ignore", message=".*type hints to the `predict` method.*")
                     ruta = res.pronosticador.guardar(Path(tmp))
                     info = mlflow.pyfunc.log_model(
                         name="modelo", python_model=EnvolturaPyfunc(), artifacts={"pronosticador": str(ruta)},
@@ -170,7 +174,7 @@ def registrar(res: Resultado, tracking_uri: str, origen: str, etiquetas: dict | 
         "wape_validacion": f"{res.produccion.metricas['wape']:.4f}",
         "fecha_corte": res.pronosticador.info["fecha_corte"],
         "ventanas_validacion": ",".join(res.pronosticador.info["ventanas_validacion"]),
-        "modelo": PRODUCCION, "run_id": run_hijo, "tanda": padre.info.run_id,
+        "modelo": PRODUCCION, "version_formato": str(VERSION_FORMATO), "run_id": run_hijo, "tanda": padre.info.run_id,
         "factores": json.dumps(res.pronosticador.factores), **etiquetas,
     }
     for k, v in tags.items():
@@ -187,6 +191,15 @@ def version_vigente(tracking_uri: str) -> str | None:
         if "RESOURCE_DOES_NOT_EXIST" in str(e.error_code) or "not found" in str(e).lower():
             return None
         raise
+
+
+def ultima_version(tracking_uri: str, origen: str | None = None) -> str | None:
+    """Versión registrada más reciente (opcionalmente con el tag `origen`), o None."""
+    mlflow.set_tracking_uri(tracking_uri)
+    filtro = f"name='{NOMBRE_MODELO}'"
+    versiones = [v for v in MlflowClient().search_model_versions(filtro)
+                 if origen is None or v.tags.get("origen") == origen]
+    return str(max(int(v.version) for v in versiones)) if versiones else None
 
 
 def promover(tracking_uri: str, version: str) -> None:

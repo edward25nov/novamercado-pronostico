@@ -17,6 +17,9 @@ from novamercado.modelo import costos as C
 from novamercado.modelo import variables as V
 
 ARCHIVO = "pronosticador.pkl"
+# Sube cuando cambian los atributos del Pronosticador; __setstate__ completa los que falten en
+# artefactos de versiones anteriores, para que un champion viejo siga cargando.
+VERSION_FORMATO = 1
 
 
 @dataclass
@@ -25,6 +28,12 @@ class Pronosticador:
     codigos: dict                       # codificación de categorías (variables.codigos_desde)
     factores: dict[str, float]          # factor k por familia: cantidad = ceil(venta · k)
     info: dict = field(default_factory=dict)  # fecha de corte, ventanas, métricas, etc.
+    version_formato: int = VERSION_FORMATO
+
+    def __setstate__(self, estado: dict):
+        # Valores por defecto de atributos agregados después de serializar (compatibilidad).
+        base = {"info": {}, "version_formato": 0}
+        self.__dict__.update({**base, **estado})
 
     def variables(self, ventas: pd.DataFrame, objetivos: pd.DataFrame, tiendas: pd.DataFrame,
                   feriados: pd.DataFrame) -> pd.DataFrame:
