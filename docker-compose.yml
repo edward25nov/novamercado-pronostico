@@ -25,14 +25,20 @@ x-airflow-comun: &airflow-comun
     OMP_NUM_THREADS: 4
     PYTHONPATH: /opt/novamercado/src
     MLFLOW_TRACKING_URI: http://mlflow:5000
-    NOVAMERCADO_DB_URL: postgresql://${PRODUCTO_DB_USUARIO}:${PRODUCTO_DB_CLAVE}@db:5432/${PRODUCTO_DB_NOMBRE}
+    # config.py arma la URL de la base del producto desde estas partes (codificando la clave).
+    PRODUCTO_DB_HOST: db
+    PRODUCTO_DB_USUARIO: ${PRODUCTO_DB_USUARIO:?definir en .env}
+    PRODUCTO_DB_CLAVE: ${PRODUCTO_DB_CLAVE:?definir en .env}
+    PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
     NOVAMERCADO_DATOS: /datos/publicados
   volumes:
     - ./dags:/opt/airflow/dags:ro
     - ./src:/opt/novamercado/src:ro
     - ./datos/publicados:/datos/publicados:ro
     - airflow-logs:/opt/airflow/logs
-  user: "${AIRFLOW_UID:-50000}:0"
+  # UID fijo de la imagen oficial: los logs van en un volumen con nombre (D1), así que no hace
+  # falta adaptarlo al anfitrión, y cambiarlo dejaría el volumen sin permisos de escritura.
+  user: "50000:0"
   restart: unless-stopped
   depends_on:
     airflow-db:
@@ -85,7 +91,10 @@ services:
       dockerfile: docker/Dockerfile.api
     image: novamercado-api:0.1
     environment:
-      NOVAMERCADO_DB_URL: postgresql://${PRODUCTO_DB_USUARIO}:${PRODUCTO_DB_CLAVE}@db:5432/${PRODUCTO_DB_NOMBRE}
+      PRODUCTO_DB_HOST: db
+      PRODUCTO_DB_USUARIO: ${PRODUCTO_DB_USUARIO:?definir en .env}
+      PRODUCTO_DB_CLAVE: ${PRODUCTO_DB_CLAVE:?definir en .env}
+      PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
       MLFLOW_TRACKING_URI: http://mlflow:5000
       AIRFLOW_URL: http://airflow-apiserver:8080
       AIRFLOW_USUARIO: ${AIRFLOW_ADMIN_USUARIO:?definir en .env}

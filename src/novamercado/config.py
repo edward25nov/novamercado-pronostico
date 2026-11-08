@@ -5,6 +5,7 @@ Los valores por defecto sirven para desarrollo local y pruebas; en Docker los de
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -17,9 +18,20 @@ class Config:
     timeout_dependencias_s: float
 
 
+def url_db() -> str:
+    """URL de la base del producto armada desde sus partes; usuario y clave van codificados
+    para que una clave con @, : o / no rompa la URL."""
+    usuario = quote(os.environ.get("PRODUCTO_DB_USUARIO", "novamercado"), safe="")
+    clave = quote(os.environ.get("PRODUCTO_DB_CLAVE", "novamercado"), safe="")
+    host = os.environ.get("PRODUCTO_DB_HOST", "localhost")
+    puerto = os.environ.get("PRODUCTO_DB_PUERTO", "5432")
+    nombre = quote(os.environ.get("PRODUCTO_DB_NOMBRE", "novamercado"), safe="")
+    return f"postgresql://{usuario}:{clave}@{host}:{puerto}/{nombre}"
+
+
 def leer() -> Config:
     return Config(
-        db_url=os.environ.get("NOVAMERCADO_DB_URL", "postgresql://novamercado:novamercado@localhost:5432/novamercado"),
+        db_url=url_db(),
         mlflow_uri=os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"),
         airflow_url=os.environ.get("AIRFLOW_URL", "http://localhost:8080"),
         airflow_usuario=os.environ.get("AIRFLOW_USUARIO", "admin"),
