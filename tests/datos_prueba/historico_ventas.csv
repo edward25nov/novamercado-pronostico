@@ -1,0 +1,7 @@
+fecha,tienda_id,familia_id,ventas,en_promocion
+2025-03-15,1,abarrotes,599,0
+2025-03-15,1,lacteos,250,2
+2025-03-15,2,abarrotes,120,1
+2025-03-16,1,abarrotes,610,0
+2025-03-16,1,lacteos,0,0
+2025-03-16,2,abarrotes,130,0
