@@ -14,6 +14,12 @@ app = FastAPI(title="NovaMercado · pronóstico diario de ventas", version="0.1.
 app.state.modelo = None  # se carga en la fase F5
 
 
+@app.get("/vivo", include_in_schema=False)
+def vivo():
+    """Vida del proceso, sin consultar dependencias: lo usa el HEALTHCHECK del contenedor."""
+    return {"vivo": True}
+
+
 @app.get("/health")
 def health():
     cfg = config.leer()

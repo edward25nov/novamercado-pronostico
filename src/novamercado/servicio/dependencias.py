@@ -4,6 +4,8 @@ Cada función devuelve None si la dependencia responde, o un texto con el motivo
 Nunca lanza excepciones: la API debe seguir respondiendo aunque una dependencia falle.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 import psycopg
 
@@ -37,5 +39,11 @@ def revisar_airflow(cfg: Config) -> str | None:
     return _revisar_http(f"{cfg.airflow_url}/api/v2/monitor/health", "Airflow", cfg.timeout_dependencias_s)
 
 
+REVISIONES = {"db": revisar_db, "mlflow": revisar_mlflow, "airflow": revisar_airflow}
+
+
 def revisar_todas(cfg: Config) -> dict[str, str | None]:
-    return {"db": revisar_db(cfg), "mlflow": revisar_mlflow(cfg), "airflow": revisar_airflow(cfg)}
+    """Revisa las tres dependencias en paralelo: el peor caso es un timeout, no la suma de tres."""
+    with ThreadPoolExecutor(max_workers=len(REVISIONES)) as ex:
+        futuros = {nombre: ex.submit(f, cfg) for nombre, f in REVISIONES.items()}
+        return {nombre: fut.result() for nombre, fut in futuros.items()}

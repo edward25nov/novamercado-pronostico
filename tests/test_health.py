@@ -33,3 +33,29 @@ def test_dependencia_caida_es_degradado(monkeypatch):
     assert r.status_code == 200
     assert r.json()["estado"] == "degradado"
     assert "MLflow" in r.json()["motivo"]
+
+
+def test_vivo_no_consulta_dependencias(monkeypatch):
+    def explota(cfg):
+        raise AssertionError("/vivo no debe revisar dependencias")
+
+    monkeypatch.setattr(dependencias, "revisar_todas", explota)
+    r = TestClient(modulo_app.app).get("/vivo")
+    assert r.status_code == 200
+
+
+def test_dependencias_lentas_se_revisan_en_paralelo(monkeypatch):
+    """Con las tres dependencias tardando 1 s, /health tarda ~1 s (en serie serían 3 s)."""
+    import time
+
+    def lenta(cfg):
+        time.sleep(1.0)
+        return "no responde"
+
+    monkeypatch.setattr(dependencias, "REVISIONES", {"db": lenta, "mlflow": lenta, "airflow": lenta})
+    modulo_app.app.state.modelo = object()
+    inicio = time.perf_counter()
+    r = TestClient(modulo_app.app).get("/health")
+    duracion = time.perf_counter() - inicio
+    assert r.json()["estado"] == "degradado"
+    assert duracion < 2.0, f"/health tardó {duracion:.2f} s"

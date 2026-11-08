@@ -14,8 +14,9 @@ RUN useradd --create-home app && mkdir -p /cache && chown app /cache
 USER app
 EXPOSE 8000
 
-# Vivo = el proceso responde HTTP (aunque /health devuelva 503 mientras no hay modelo).
-HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 CMD python -c "import urllib.request as u, urllib.error as e;\
-exec('try: u.urlopen(\"http://localhost:8000/health\", timeout=4)\nexcept e.HTTPError: pass')"
+# Vida del proceso: /vivo no consulta dependencias, así que una dependencia lenta o caída no
+# marca la API como unhealthy (D18). El estado de las dependencias lo informa /health.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8000/vivo', timeout=4)"
 
 CMD ["uvicorn", "novamercado.servicio.app:app", "--host", "0.0.0.0", "--port", "8000"]
