@@ -134,8 +134,9 @@ def cargar_publicados(con: psycopg.Connection, carpeta: Path) -> dict[str, str]:
                     "INSERT INTO cargas (archivo, huella, filas) VALUES (%s, %s, %s) "
                     "ON CONFLICT (archivo) DO UPDATE SET huella = EXCLUDED.huella, filas = EXCLUDED.filas, "
                     "cargado_en = now()", (archivo.nombre, h, filas))
-        except psycopg.Error as e:
-            # Contenido inválido (p. ej. ventas negativas, fecha mal escrita): la transacción del
+        except (psycopg.DataError, psycopg.IntegrityError) as e:
+            # Solo errores de contenido (p. ej. ventas negativas, fecha mal escrita); una caída de la
+            # base (OperationalError) se propaga tal cual. La transacción del
             # archivo se revierte, los archivos anteriores quedan cargados y en el próximo arranque
             # se reintenta este (su huella no se registró).
             motivo = e.diag.message_primary if e.diag and e.diag.message_primary else str(e)
