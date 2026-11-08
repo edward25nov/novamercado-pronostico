@@ -182,15 +182,23 @@ def registrar(res: Resultado, tracking_uri: str, origen: str, etiquetas: dict | 
     return version
 
 
-def version_vigente(tracking_uri: str) -> str | None:
-    """Versión con el alias champion, o None si no existe (MLflow debe responder)."""
+def vigente(tracking_uri: str) -> tuple[str, str] | None:
+    """(versión, run_id) del alias champion, o None si no existe (MLflow debe responder). El run_id
+    identifica el modelo aunque el Registry se reinicie y vuelva a numerar desde 1."""
     mlflow.set_tracking_uri(tracking_uri)
     try:
-        return str(MlflowClient().get_model_version_by_alias(NOMBRE_MODELO, ALIAS).version)
+        v = MlflowClient().get_model_version_by_alias(NOMBRE_MODELO, ALIAS)
     except mlflow.exceptions.MlflowException as e:
         if "RESOURCE_DOES_NOT_EXIST" in str(e.error_code) or "not found" in str(e).lower():
             return None
         raise
+    return str(v.version), str(v.run_id or v.tags.get("run_id", ""))
+
+
+def version_vigente(tracking_uri: str) -> str | None:
+    """Versión con el alias champion, o None si no existe (MLflow debe responder)."""
+    actual = vigente(tracking_uri)
+    return actual[0] if actual else None
 
 
 def ultima_version(tracking_uri: str, origen: str | None = None) -> str | None:

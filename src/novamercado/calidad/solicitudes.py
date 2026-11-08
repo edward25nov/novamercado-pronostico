@@ -336,10 +336,10 @@ def _limites(cat: Catalogo, tienda: int, desde):
 
 
 def limpiar_prediccion(cuerpo, cat: Catalogo,
-                       promo_previa: Callable[[int, str], int | None] = lambda t, f: None
+                       promo_previa: Callable[[int, str, object], int | None] = lambda t, f, d: None
                        ) -> tuple[PrediccionCanonica, list[Observacion]]:
-    """Política para POST /v1/prediccion. `promo_previa(tienda, familia)` = última promoción
-    registrada (D9), o None."""
+    """Política para POST /v1/prediccion. `promo_previa(tienda, familia, fecha)` = última promoción
+    conocida hasta esa fecha (D9), o None."""
     reg = Registro()
     obj = _raiz(leer_cuerpo(cuerpo, reg), reg)
     campos = _mapear(obj, RAIZ_PREDICCION, "", reg)
@@ -349,10 +349,10 @@ def limpiar_prediccion(cuerpo, cat: Catalogo,
         reg.advertir("familias", "no vino la lista de familias; se pronosticaron todas", "faltan_familias")
 
     def imputar(fid: str) -> tuple[int, str]:
-        previa = promo_previa(tienda, fid)
+        previa = promo_previa(tienda, fid, f)
         if previa is None:
-            return 0, "se usó 0 (no hay promociones registradas de esa familia)"
-        return int(previa), f"se usó {previa}, la última promoción registrada"
+            return 0, "se usó 0 porque no hay promociones conocidas de esa familia"
+        return int(previa), f"se usó {previa}, la última promoción conocida de la tienda"
 
     vistos: dict[str, list[_Promo]] = {}
     for ruta, item in _items(campos.get("familias"), "en_promocion", reg):
@@ -383,7 +383,7 @@ def limpiar_prediccion(cuerpo, cat: Catalogo,
     for fid in cat.familias:
         if fid not in vistos:
             valor, como = imputar(fid)
-            reg.advertir("familias", f"faltaba la familia '{fid}'; se pronosticó con en_promocion: {como}",
+            reg.advertir("familias", f"faltaba la familia '{fid}'; se pronosticó y para en_promocion {como}",
                          "faltan_familias")
             familias.append(FamiliaCanonica(familia_id=fid, en_promocion=valor))
     return PrediccionCanonica(tienda_id=tienda, fecha=f, familias=familias), reg.observaciones

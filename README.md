@@ -4,7 +4,7 @@ Servicio de pronóstico diario de ventas por familia de producto para las tienda
 (Laboratorio 2, Product Development). Integra FastAPI, PostgreSQL, MLflow y Apache Airflow, y se
 levanta con un solo comando.
 
-> Estado: en construcción por fases (F1: contenedores listos; el modelo llega en F3).
+> Estado: en construcción por fases (F5: servicio completo; falta el reentrenamiento con Airflow, F6).
 
 ## Requisitos
 - Docker Desktop (o Docker Engine) con Compose v2, con al menos 4 GB de memoria para Docker.
@@ -29,6 +29,22 @@ Al arrancar, el servicio `inicializador` aplica el esquema de la base y carga lo
 publicados; termina solo (`docker compose ps -a` lo muestra como `Exited (0)`). En los arranques
 siguientes detecta que los archivos no cambiaron y no repite la carga
 (`docker compose logs inicializador`).
+
+El producto está listo cuando `curl localhost:8000/health` responde `{"estado": "ok", ...}`
+(medido: unos 50 s desde cero con las imágenes construidas; unos 15 s al volver a levantarlo).
+
+## Uso de la API
+Documentación interactiva en http://localhost:8000/docs. Contrato completo en el Anexo del enunciado.
+
+```
+curl -s localhost:8000/health
+curl -s localhost:8000/modelo
+curl -s -X POST localhost:8000/v1/prediccion -H 'content-type: application/json' \
+     -d @datos/publicados/ejemplos/prediccion_valida.json
+curl -s -X POST localhost:8000/v1/observaciones -H 'content-type: application/json' \
+     -d @datos/publicados/ejemplos/observacion_valida.json
+.venv/bin/python scripts/enviar_ejemplos.py   # todos los ejemplos -> evidencia/respuestas_api.md
+```
 
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos
 los datos del producto, MLflow y Airflow: `docker compose down -v`.

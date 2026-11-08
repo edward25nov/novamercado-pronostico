@@ -80,6 +80,13 @@ class GBM:
         self.modelo = None
         self.respaldo: dict = {}
         self.ratio_max: float | None = None
+        self.columnas: list[str] = []
+
+    def __setstate__(self, estado: dict):
+        # Compatibilidad con artefactos anteriores (D24): atributos agregados después de F3.
+        # columnas = [] significa "todas las de la entrada" (como entrenaban las versiones de F3).
+        base = {"columnas": [], "respaldo": {}, "ratio_max": None, "escala": "absoluta"}
+        self.__dict__.update({**base, **estado})
 
     @property
     def nombre(self):
@@ -114,14 +121,19 @@ class GBM:
         if self.vida_media_dias:
             antiguedad = (fechas.max() - fechas).dt.days.to_numpy()
             pesos = 0.5 ** (antiguedad / self.vida_media_dias)
+        Z = self._entrada(X)
+        # Solo columnas con más de un valor: una constante (p. ej. ningún evento comercial en el periodo)
+        # no aporta y hace fallar al binning de scikit-learn 1.9.1. Se guarda la lista para predecir.
+        self.columnas = [c for c in Z.columns if Z[c].nunique(dropna=True) > 1]
         self.modelo = HistGradientBoostingRegressor(
-            loss="poisson", categorical_features=[X.columns.get_loc(c) for c in V.CATEGORICAS],
+            loss="poisson", categorical_features=[c in V.CATEGORICAS for c in self.columnas],
             random_state=self.semilla, early_stopping=False, **self.hp)
-        self.modelo.fit(self._entrada(X), objetivo, sample_weight=pesos)
+        self.modelo.fit(Z[self.columnas], objetivo, sample_weight=pesos)
         return self
 
     def predecir(self, X: pd.DataFrame) -> np.ndarray:
-        p = self.modelo.predict(self._entrada(X))
+        Z = self._entrada(X)
+        p = self.modelo.predict(Z[self.columnas] if self.columnas else Z)
         if self.objetivo == "relativo":
             # Tope de seguridad: ninguna predicción supera 1,5 veces el ratio extremo visto al entrenar.
             p = np.clip(p, 0, self.ratio_max) * V.nivel(X, self.respaldo)
