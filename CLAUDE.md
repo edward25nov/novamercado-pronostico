@@ -38,7 +38,9 @@ enunciado, resumido abajo.
   Las credenciales van en `.env` (no se versiona); `.env.example` sí.
 - El modelo vigente es el alias `champion` del Model Registry; solo lo mueve el criterio de
   reemplazo, nunca a mano. Un reentrenamiento fallido o no aprobado no toca el alias.
-- Las pruebas (`pytest`) no necesitan MLflow, Airflow ni Docker en ejecución.
+- Las pruebas (`pytest`) no necesitan MLflow, Airflow ni Docker en ejecución. Las de la API usan un
+  Postgres de pruebas y un modelo pequeño entrenado en la prueba (`tests/test_api.py`).
+- Los endpoints nunca esperan a MLflow: leen el estado que mantiene el monitor (D17).
 - Versiones fijas en `requirements.txt` e imágenes; las mismas dependencias en API, inicializador
   y Airflow.
 
@@ -66,7 +68,10 @@ enunciado, resumido abajo.
   - `calidad/`: defensa del contrato. `normalizar.py` (texto, campos, enteros, fechas), `catalogo.py`,
     `solicitudes.py` (`limpiar_prediccion`, `limpiar_observacion`: devuelven la forma canónica y las
     observaciones, o lanzan `Rechazo`), `esquemas.py` (Pydantic del contrato).
-  - `servicio/`: API FastAPI. `inicializador.py`: esquema, carga y primer modelo.
+  - `servicio/`: API FastAPI. `app.py` (endpoints: solo orquestan), `estado.py` (modelo vigente con
+    caché y recarga, catálogo, monitor de salud en un hilo), `repositorio.py` (SQL de la operación),
+    `dependencias.py` (revisiones de db, MLflow y Airflow).
+  - `inicializador.py`: esquema, carga y primer modelo.
 - `dags/`: DAGs de Airflow 3; solo orquestan funciones de `src/novamercado/`.
 - `docker/`: Dockerfiles. `docker-compose.yml` en la raíz (proyecto `novamercado`).
 - `tests/`: pruebas con pytest (corren en cada PR con GitHub Actions).

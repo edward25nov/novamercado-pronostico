@@ -24,10 +24,10 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Calidad de los datos de entrada**
   - D7. Política por principios: reparar, advertir o rechazar — *vigente*
   - D8. Taxonomía de problemas y su política — *vigente*
-  - D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida — *vigente (la última promoción la provee el servicio en F5)*
+  - D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida — *vigente*
   - D10. Familia repetida con valores distintos: se elige el valor según el costo de la familia — *vigente*
   - D11. Números con separadores: tres dígitos son miles, uno o dos son decimales — *vigente*
-  - D12. Fechas: nunca el reloj del sistema; rango válido según los datos — *vigente (aviso de datos recientes en F5)*
+  - D12. Fechas: nunca el reloj del sistema; rango válido según los datos — *vigente*
 - **Modelo**
   - D13. Información que usa el modelo al predecir — *vigente*
   - D14. Cantidad sugerida: newsvendor por familia, calibrada por costo — *vigente*
@@ -37,7 +37,8 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D24. Qué se registra en MLflow y cómo se empaqueta el modelo — *vigente*
 - **Operación**
   - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *propuesta (F6)*
-  - D17. Recarga del modelo en caliente, caché local y monitor de salud — *propuesta (F5)*
+  - D17. Recarga del modelo en caliente, caché local y monitor de salud — *vigente*
+  - D25. La API lee el cuerpo crudo y nunca responde 500 por datos de entrada — *vigente*
 
 ## Producto e infraestructura
 
@@ -173,8 +174,8 @@ indicada y se actualiza con números medidos en ese mismo PR.
   tardaba 9,05 s con las revisiones en serie y el contenedor quedaba `unhealthy` (el healthcheck
   usaba `/health` con timeout de 4 s). Tras el cambio tarda 3,1 s (tres mediciones: 3,09–3,11 s) y el
   contenedor siguió `healthy` durante 40 s con las dependencias pausadas. Hay una prueba con
-  dependencias lentas que exige que las revisiones corran en paralelo. En F5 las revisiones pasan a
-  un monitor en segundo plano (D17) y `/health` responderá al instante.
+  dependencias lentas que exige que las revisiones corran en paralelo. Desde F5 las revisiones las hace
+  el monitor en segundo plano (D17) y `/health` responde al instante con el último resultado.
 
 ### D19. La API habla con Airflow por su API REST v2 con el usuario de `.env`
 - **Decisión:** `airflow-init` crea el usuario administrador de `.env` (gestor de autenticación FAB,
@@ -315,6 +316,10 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   atípica se acotaba al máximo histórico: no cambiaba la predicción (el GBM predice lo mismo para 19 y
   para 500, 27,8537, porque no extrapola) pero sí el `en_promocion` registrado, que el
   reentrenamiento usa para las fechas nuevas; ahora se conserva.
+- **Sinónimo ilegible junto a uno válido:** `{"tienda_id": 5, "tienda": "xyz"}` o una fecha válida
+  con `"date": "mañana"` se rechazan. Se mantiene a propósito: dos campos de identidad que no
+  coinciden (aunque uno sea ilegible) no permiten saber con certeza cuál es el bueno, y equivocarse de
+  tienda o de fecha es peor que pedir que se reenvíe (D7).
 - **Verificación:** 134 pruebas de calidad: los 10 ejemplos del catálogo y los 2 válidos publicados
   (cuando los archivos están), unos 100 casos fuera del catálogo y fuzzing con hypothesis (JSON y
   bytes arbitrarios y mutaciones de solicitudes válidas: 400 casos por prueba en la CI; una corrida
@@ -326,9 +331,11 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 
 ### D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida
 - **Decisión:** si la solicitud omite familias que la tienda vende (E05), se pronostican igual, con
-  una observación `advertir` por cada una. Su `en_promocion` es el de la última solicitud registrada
-  para esa tienda y familia; si no hay ninguna, 0. La misma imputación aplica a una promoción
-  faltante o inválida.
+  una observación `advertir` por cada una. Su `en_promocion` es la última promoción conocida de esa
+  tienda y familia **hasta la fecha pedida**: la de la solicitud más reciente para una fecha anterior
+  o igual, o la del histórico si es más reciente; si no hay ninguna, 0. La misma imputación aplica a
+  una promoción faltante o inválida. Nunca se usa una solicitud para una fecha posterior (una tienda
+  puede pedir fechas en desorden).
 - **Alternativas:** responder solo las familias recibidas; asumir siempre 0.
 - **Justificación:** el catálogo lo describe como un problema ("faltan familias que la tienda
   vende"), así que la tienda necesita esos pronósticos. La promoción es muy persistente: correlación
@@ -367,7 +374,10 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   límite superior es un año después del último dato conocido (o el fin de `feriados.csv` si es
   posterior): más allá, la fecha se considera absurda y se rechaza. Entre el fin de `feriados.csv`
   (2026-12-31) y ese límite se responde con advertencia: "se asumió un día sin feriados ni fechas
-  especiales". Si faltan observaciones
+  especiales". El último dato conocido se actualiza con cada observación (no queda fijo en el
+  histórico). Si faltan las ventas del día anterior de alguna familia, la respuesta advierte cuál es
+  la última fecha con dato y el pronóstico se hace con ella (`datos_recientes_faltantes`); una
+  familia sin ventas en los 70 días anteriores usa el nivel de respaldo (D23) y también se advierte. Si faltan observaciones
   recientes para la fecha pedida, se responde con advertencia indicando la última fecha con datos
   (lo agrega el servicio en F5, porque necesita la base).
 - **Alternativas:** aceptar cualquier fecha; rechazar todo lo posterior a `feriados.csv` (la versión
@@ -450,6 +460,11 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   ante un cambio de nivel, justo el riesgo que anuncia el enunciado.
 
 ### D23. Guardas numéricas del modelo
+- **Columnas constantes (F5):** el GBM entrena solo con las columnas que tienen más de un valor y
+  recuerda la lista para predecir. scikit-learn 1.9.1 falla al discretizar una columna constante
+  (p. ej. si en el periodo de entrenamiento no hay ninguna fecha comercial), cosa que se descubrió al
+  probar la API con datos sintéticos. Con los datos publicados todas varían: el costo de la v1 no
+  cambió (369 741).
 - **Decisión:** el modelo se entrena solo con filas cuya serie tiene nivel de 28 días (al menos 7
   días con dato), el objetivo relativo se acota en 10, la predicción relativa se acota en 1,5 veces
   el percentil 99,9 visto al entrenar y cualquier NaN o infinito se vuelve 0. Si una serie no tiene
@@ -496,7 +511,45 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   encolar duplicaría el trabajo sobre los mismos datos y alargaría el tiempo hasta tener el resultado.
 
 ### D17. Recarga del modelo en caliente, caché local y monitor de salud
-- **Propuesta:** la API consulta cada 30 s la versión del alias `champion` y, si cambió, carga la
-  nueva y la reemplaza de forma atómica (requisito: ≤ 2 minutos). Guarda una copia del modelo en un
-  volumen para arrancar aunque MLflow no esté disponible. Un monitor en segundo plano revisa cada
-  15 s la base de datos, MLflow, Airflow y el modelo; `/health` responde con ese estado.
+- **Decisión** (`servicio/estado.py`): un hilo en segundo plano, cada 15 s, revisa en paralelo la
+  base, MLflow y Airflow (timeout de 3 s cada una) y refresca el catálogo; y cada 30 s (5 s mientras
+  no hay modelo) consulta la versión de `@champion`. Si cambió, descarga esa versión, la guarda en el
+  volumen `api-cache` y la reemplaza con una sola asignación (atómica: cada solicitud toma una foto del
+  modelo al empezar, así nunca mezcla dos versiones). Si MLflow no responde, se conserva el modelo
+  cargado. Al arrancar, primero se carga la copia de la caché (sin red) y luego se consulta MLflow.
+  `/health` solo lee este estado: responde al instante. Cada paso del monitor es independiente: una
+  falla al cargar el catálogo no impide cargar el modelo (ver "Medido").
+- **Alternativas:** cargar el modelo solo al arrancar y reiniciar la API al promover (sesión 5, no
+  cumple "sin reinicio manual"); que el DAG avise a la API (acopla Airflow con la API y falla si la
+  API está caída en ese momento); consultar MLflow en cada solicitud (latencia y dependencia).
+- **Medido (F5, en Docker):**
+  - Promoción de una v2 → la API la usó 5 s después, sin reiniciar (peor caso 30 s; límite 2 min).
+  - MLflow detenido → `/health` pasó a `degradado` ("MLflow no disponible") a los 8 s (límite 1 min)
+    y las predicciones siguieron respondiendo 200 con la versión cargada.
+  - API reiniciada con MLflow detenido → arrancó con el modelo de la caché (`"origen": "cache"`) en
+    1 s y predijo normalmente.
+  - MLflow de vuelta → `ok` a los 16 s (límite 2 min).
+  - Desde cero: `ok` 48 s después del `up`; tras `down` + `up`, 13 s (modelo desde la caché).
+  - Error real encontrado: en el primer arranque la API cargaba el catálogo antes de que el
+    inicializador terminara el histórico (fecha máxima `NaT`), esa excepción cortaba la revisión y el
+    modelo nunca se cargaba. Ahora el catálogo espera a que haya ventas y los pasos están separados
+    (hay prueba de ambos).
+
+### D25. La API lee el cuerpo crudo y nunca responde 500 por datos de entrada
+- **Decisión:** `/v1/prediccion` y `/v1/observaciones` leen el cuerpo como bytes y lo pasan a la
+  limpieza (D7); FastAPI no lo valida antes, porque su 422 automático rechazaría casos reparables
+  (`"tienda_id": "T05"`). Un `Rechazo` responde 422 con `detail` (texto); cualquier otra excepción de la
+  limpieza también responde 422 ("no se pudo interpretar la solicitud") y queda en el log y en
+  `solicitudes`. Si falla la base o no hay modelo, 503 con `detail`. Toda solicitud, aceptada o
+  rechazada, se registra con su cuerpo crudo (D20).
+- **Respuestas:** se validan con los modelos de Pydantic del contrato (`calidad/esquemas.py`); las
+  predicciones vuelven en el orden de la solicitud y luego las familias completadas (D9).
+  `GET /modelo` agrega `origen` (mlflow o cache) y `fecha_corte`; `GET /health` agrega
+  `dependencias`, `version_modelo` y `origen_modelo` (el contrato permite campos adicionales).
+- **Observaciones sin modelo:** `/v1/observaciones` no necesita el modelo: registra ventas aunque
+  todavía no haya champion (solo necesita el catálogo).
+- **Medido:** 100 solicitudes de 12 familias: mediana 79 ms, p95 265 ms (lee 70 días de ventas de la
+  tienda, construye las variables y registra solicitud, correcciones y predicciones en una
+  transacción). Las respuestas a los ejemplos publicados y a 8 casos fuera del catálogo están en
+  `evidencia/respuestas_api.md` (`scripts/enviar_ejemplos.py`).
+
