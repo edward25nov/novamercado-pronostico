@@ -14,11 +14,13 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D2. Los archivos publicados van en `datos/publicados/`, fuera de Git y en solo lectura — *vigente*
   - D3. Versiones fijas y las mismas dependencias en la API, el inicializador y Airflow — *vigente*
   - D4. Puerto de MLflow en el anfitrión configurable, 5000 por defecto — *vigente*
-  - D5. Un inicializador idempotente prepara el producto desde cero — *propuesta (F2–F3)*
+  - D5. Un inicializador idempotente prepara el producto desde cero — *vigente para la carga (F2); entrenamiento en F3*
   - D18. La API solo depende de la base de datos para arrancar — *vigente*
   - D19. La API habla con Airflow por su API REST v2 con el usuario de `.env` — *vigente (F1), se usa en F6*
 - **Persistencia**
-  - D6. Una sola tabla de ventas para el histórico y las observaciones — *propuesta (F2)*
+  - D6. Una sola tabla de ventas para el histórico y las observaciones — *vigente (esquema F2; endpoint en F5)*
+  - D20. Qué se registra de la operación — *vigente (esquema F2)*
+  - D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio — *vigente*
 - **Calidad de los datos de entrada**
   - D7. Política por principios: reparar, advertir o rechazar — *propuesta (F4)*
   - D8. Taxonomía de problemas y su política — *propuesta (F4)*
@@ -110,6 +112,33 @@ indicada y se actualiza con números medidos en ese mismo PR.
   entrene la API.
 - **Justificación:** no depende de que Airflow esté listo (es el servicio que más tarda en arrancar,
   y el producto debe estar en `ok` en menos de 10 minutos). La API se mantiene liviana y solo sirve.
+- **Carga (F2):** cada archivo se valida antes de cargar el primero (si falta uno o cambian sus
+  columnas, no se carga nada y el inicializador termina con error explicando qué falta). Cada archivo
+  se carga con `COPY` a una tabla temporal y un `INSERT … ON CONFLICT DO UPDATE … WHERE IS DISTINCT
+  FROM`, en una transacción junto con su huella SHA-256 en `cargas`. Misma huella = no se lee. Un
+  archivo modificado actualiza solo las filas que cambian y nunca duplica; un cambio en el histórico
+  no pisa una venta que ya llegó como observación. Un `pg_advisory_lock` impide que dos
+  inicializadores carguen a la vez.
+- **Medido (F2, datos publicados):** desde cero el inicializador carga 10 tiendas, 12 familias,
+  12 costos, 61 feriados y 83 052 ventas en 0,5 s (la suma de ventas en la base, 17 565 431, es igual
+  a la del CSV) y termina 13 s después del `up`. En el segundo arranque responde "sin cambios" para los
+  cinco archivos en 0,0 s. Con dos inicializadores lanzados a la vez sobre una base vacía, uno cargó
+  las 83 052 filas y el otro esperó el candado y encontró "sin cambios"; quedaron 83 052 filas.
+- **Contenido inválido:** si un archivo trae valores que la base rechaza (p. ej. una venta
+  negativa), el inicializador registra una sola línea, `historico_ventas.csv: contenido inválido
+  (<motivo de Postgres>)`, y termina con código 1. La transacción de ese archivo se revierte; los
+  archivos anteriores quedan cargados y, como la huella del fallido no se registró, se reintenta en el
+  próximo arranque. Verificado con una venta `-5` en la primera fila del histórico publicado:
+  quedaron los cuatro catálogos y 0 ventas.
+- **Filas que desaparecen de un archivo republicado no se borran:** el upsert solo inserta o
+  actualiza. *Alternativa:* borrar lo que ya no está en el archivo. *Justificación:* las ventas son
+  hechos; que una fila falte en una nueva publicación es más probable que sea un archivo incompleto
+  que una venta que no ocurrió, y borrarla cambiaría en silencio los datos de entrenamiento y las
+  variables de predicción. Las filas actualizadas marcan `actualizado_en`.
+- **No bloquea a la API:** la API no depende del inicializador (D18); si este fallara, la API
+  arranca igual y responde 503 `sin_modelo` en `/health` (el motivo todavía no dice por qué no hay
+  modelo; en F3/F5 el motivo indicará si falló la inicialización o si el primer modelo está en
+  entrenamiento).
 
 ### D18. La API solo depende de la base de datos para arrancar
 - **Decisión:** en el compose, `api` espera solo a que `db` esté sana (`depends_on` con
@@ -153,6 +182,34 @@ indicada y se actualiza con números medidos en ese mismo PR.
   son idénticos al histórico: con tablas separadas, enviar un dato que el producto ya conoce
   contaría como 12 registros nuevos. Con una sola tabla la idempotencia es contra todo lo conocido,
   y el entrenamiento y las variables de predicción leen una única fuente.
+
+### D20. Qué se registra de la operación
+- **Decisión:** el esquema (`src/novamercado/datos/esquema.sql`) registra:
+  - `solicitudes`: cada solicitud recibida **incluidas las rechazadas**, con el cuerpo tal como llegó
+    (texto, aunque no sea JSON válido), su forma normalizada, el código HTTP, el estado de calidad y
+    el motivo del rechazo.
+  - `correcciones`: cada observación de calidad (`campo`, `accion`, `detalle`) de una solicitud.
+  - `predicciones`: cada valor entregado con el `en_promocion` usado y la `version_modelo`.
+  - `ventas` y `ventas_historial`: lo conocido (D6) y los valores que una observación corrigió.
+  - `reentrenamientos`: estado, resultado y métricas de cada ejecución (id = `dag_run_id`).
+  - `cargas`: archivos publicados cargados y su huella.
+- **Alternativas:** guardar solo las solicitudes aceptadas; un log en archivos.
+- **Justificación:** el enunciado pide registrar solicitudes, predicciones, correcciones y
+  observaciones. Guardar el cuerpo crudo de los rechazos permite auditar la política (D7) y
+  reproducir un caso nuevo como prueba. `en_promocion` de cada predicción es el dato que el
+  reentrenamiento necesita para las fechas sin histórico (las observaciones no lo traen). El reloj
+  del sistema solo aparece en columnas de auditoría (`recibido_en`, `cargado_en`), nunca en reglas.
+
+### D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio
+- **Decisión:** las pruebas de carga e idempotencia corren contra Postgres 16.15 (en GitHub Actions
+  como servicio del job; en local, un contenedor desechable en el puerto 55432). Cada prueba crea un
+  esquema `prueba_<id>` y lo borra al terminar. Usan archivos pequeños de `tests/datos_prueba/` con
+  el mismo formato que los publicados, porque los publicados no están en el repositorio. Sin
+  `NOVAMERCADO_TEST_DB_URL` se omiten (`pytest -rs` lo muestra).
+- **Alternativas:** SQLite en memoria; simular la base con objetos falsos.
+- **Justificación:** la idempotencia depende de `ON CONFLICT … WHERE IS DISTINCT FROM`, `COPY` y
+  candados de Postgres, que SQLite no tiene o hace distinto; probarlos con otra base no prueba nada.
+  El enunciado solo excluye depender de MLflow en ejecución.
 
 ## Calidad de los datos de entrada
 

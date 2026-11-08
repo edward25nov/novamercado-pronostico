@@ -25,6 +25,11 @@ levanta con un solo comando.
 | Airflow | http://localhost:8080 (usuario y clave de `.env`) | `airflow-apiserver:8080` |
 | Postgres del producto | no se publica | `db:5432` |
 
+Al arrancar, el servicio `inicializador` aplica el esquema de la base y carga los archivos
+publicados; termina solo (`docker compose ps -a` lo muestra como `Exited (0)`). En los arranques
+siguientes detecta que los archivos no cambiaron y no repite la carga
+(`docker compose logs inicializador`).
+
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos
 los datos del producto, MLflow y Airflow: `docker compose down -v`.
 
@@ -49,6 +54,9 @@ Esa carpeta no se versiona en Git y los contenedores la leen en modo solo lectur
 ```
 python3.13 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
+# Postgres desechable para las pruebas de base de datos (sin él, esas pruebas se omiten)
+docker run -d --name novamercado-pruebas-db -p 55432:5432 -e POSTGRES_PASSWORD=pruebas postgres:16.15
+export NOVAMERCADO_TEST_DB_URL=postgresql://postgres:pruebas@localhost:55432/postgres
 .venv/bin/pytest -q
 .venv/bin/python scripts/perfilar_datos.py   # regenera docs/perfil_datos.md
 ```

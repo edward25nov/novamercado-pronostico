@@ -5,7 +5,10 @@ Los valores por defecto sirven para desarrollo local y pruebas; en Docker los de
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote
+
+RAIZ_REPO = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,7 @@ class Config:
     airflow_usuario: str
     airflow_clave: str
     timeout_dependencias_s: float
+    datos_dir: Path
 
 
 def url_db() -> str:
@@ -37,4 +41,5 @@ def leer() -> Config:
         airflow_usuario=os.environ.get("AIRFLOW_USUARIO", "admin"),
         airflow_clave=os.environ.get("AIRFLOW_CLAVE", "admin"),
         timeout_dependencias_s=float(os.environ.get("TIMEOUT_DEPENDENCIAS_S", "3")),
+        datos_dir=Path(os.environ.get("NOVAMERCADO_DATOS", RAIZ_REPO / "datos" / "publicados")),
     )

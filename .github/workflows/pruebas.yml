@@ -6,6 +6,17 @@ on:
 jobs:
   pruebas:
     runs-on: ubuntu-latest
+    services:
+      # Postgres para las pruebas de base de datos (no hay MLflow ni Airflow en las pruebas)
+      postgres:
+        image: postgres:16.15
+        env:
+          POSTGRES_PASSWORD: pruebas
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NOVAMERCADO_TEST_DB_URL: postgresql://postgres:pruebas@localhost:55432/postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -13,5 +24,4 @@ jobs:
           python-version: "3.13"
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
-      # pytest devuelve 5 cuando aún no hay pruebas (fase F0)
-      - run: pytest -q || [ $? -eq 5 ]
+      - run: pytest -q -rs
