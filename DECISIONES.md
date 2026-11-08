@@ -22,12 +22,12 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D20. Qué se registra de la operación — *vigente (esquema F2)*
   - D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio — *vigente*
 - **Calidad de los datos de entrada**
-  - D7. Política por principios: reparar, advertir o rechazar — *propuesta (F4)*
-  - D8. Taxonomía de problemas y su política — *propuesta (F4)*
-  - D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida — *propuesta (F4)*
-  - D10. Familia repetida con valores distintos: se elige el valor según el costo de la familia — *propuesta (F4)*
-  - D11. Números con coma: gana la interpretación que da un entero — *propuesta (F4)*
-  - D12. Fechas: nunca el reloj del sistema; rango válido según los datos — *propuesta (F4)*
+  - D7. Política por principios: reparar, advertir o rechazar — *vigente*
+  - D8. Taxonomía de problemas y su política — *vigente*
+  - D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida — *vigente (la última promoción la provee el servicio en F5)*
+  - D10. Familia repetida con valores distintos: se elige el valor según el costo de la familia — *vigente*
+  - D11. Números con separadores: tres dígitos son miles, uno o dos son decimales — *vigente*
+  - D12. Fechas: nunca el reloj del sistema; rango válido según los datos — *vigente (aviso de datos recientes en F5)*
 - **Modelo**
   - D13. Información que usa el modelo al predecir — *vigente*
   - D14. Cantidad sugerida: newsvendor por familia, calibrada por costo — *vigente*
@@ -218,13 +218,18 @@ indicada y se actualiza con números medidos en ese mismo PR.
   reproducir un caso nuevo como prueba. `en_promocion` de cada predicción es el dato que el
   reentrenamiento necesita para las fechas sin histórico (las observaciones no lo traen). El reloj
   del sistema solo aparece en columnas de auditoría (`recibido_en`, `cargado_en`), nunca en reglas.
+- **Pendiente para F6:** las ventas atípicas se guardan (no se inventa ni se descarta un dato real),
+  pero la observación queda con la regla `ventas_atipicas` en `correcciones`; el reentrenamiento
+  debe excluirlas o recortarlas para que un error de captura (p. ej. 99 999) no deforme el modelo.
 
 ### D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio
 - **Decisión:** las pruebas de carga e idempotencia corren contra Postgres 16.15 (en GitHub Actions
   como servicio del job; en local, un contenedor desechable en el puerto 55432). Cada prueba crea un
   esquema `prueba_<id>` y lo borra al terminar. Usan archivos pequeños de `tests/datos_prueba/` con
   el mismo formato que los publicados, porque los publicados no están en el repositorio. Sin
-  `NOVAMERCADO_TEST_DB_URL` se omiten (`pytest -rs` lo muestra).
+  `NOVAMERCADO_TEST_DB_URL` se omiten (`pytest -rs` lo muestra). Las 12 pruebas con los ejemplos
+  publicados (`tests/test_calidad_ejemplos.py`) también se omiten en la CI, porque necesitan
+  `datos/publicados/`; corren en local y en la verificación con un clon limpio.
 - **Alternativas:** SQLite en memoria; simular la base con objetos falsos.
 - **Justificación:** la idempotencia depende de `ON CONFLICT … WHERE IS DISTINCT FROM`, `COPY` y
   candados de Postgres, que SQLite no tiene o hace distinto; probarlos con otra base no prueba nada.
@@ -254,32 +259,70 @@ indicada y se actualiza con números medidos en ese mismo PR.
   no.
 
 ### D8. Taxonomía de problemas y su política
-Clases generales (la primera columna) y cómo caen en ellas los ejemplos del catálogo:
+Implementada en `src/novamercado/calidad/` (funciones puras; `regla` es el nombre interno que queda
+registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 
-| Clase | Política | Ejemplos (catálogo y otros) |
+**Identidad (si no se puede establecer, se rechaza)**
+
+| Clase (`regla`) | Política | Ejemplos |
 |---|---|---|
-| Identificador de tienda con otro formato | reparar si apunta a una sola tienda del catálogo | E01 `"T05"`, `"5"`; `5.0`, `"tienda 5"`, nombre exacto de la tienda |
-| Tienda inexistente, ambigua o fecha anterior a su apertura | rechazar | `99`, `"Guatemala"` (tres tiendas), tienda 10 antes del 2025-03-15 |
-| Familia escrita de otra forma | reparar si la forma normalizada coincide con un id o un nombre | E02 `"LÁCTEOS"`, `"lacteos "`, `"Frutas y Verduras"` |
-| Familia parecida pero no idéntica | advertir si hay un único candidato cercano | `"lacteo"`, `"panaderias"` |
-| Familia desconocida | advertir y excluirla; rechazar si no queda ninguna | `"ferreteria"` |
-| Número como texto o decimal entero | reparar | E03 `"3"`, `2.0` |
-| Promoción no entera, negativa, faltante o no numérica | advertir e imputar (D9) | `2.5`, `-1`, `null`, `"sí"` |
-| Fecha en otro formato sin ambigüedad | reparar | E04 `"2025-11-17T00:00:00"`, `"17/11/2025"` |
-| Fecha ambigua (día y mes ≤ 12) | advertir, se interpreta como día/mes | `"03/04/2026"` |
-| Fecha faltante, imposible o fuera del rango | rechazar (D12) | `"2026-02-30"` |
-| Faltan familias que la tienda vende | advertir y completarlas (D9) | E05 |
-| Familia repetida | reparar si los valores son iguales; advertir y elegir según D10 si difieren | E06 |
-| Nombre de campo distinto | reparar si es un alias conocido o su forma normalizada coincide | E07 `"tienda"`; `"tiendaId"`, `"id_tienda"` |
-| Campo desconocido | advertir que se ignoró | `"origen": "pos"` |
-| Ventas negativas | advertir y no guardar ese valor | E08 `-4` (devoluciones) |
-| Envío repetido | sin problema: idempotente, `registros_guardados = 0` (D6) | E09 |
-| Número con separador de miles o coma decimal | reparar con la interpretación entera (D11) | E10 `"1,234"`, `"812,0"` |
-| Ventas no enteras, faltantes o no numéricas | advertir y no guardar ese valor | `812.5`, `null` |
-| Cuerpo que no es JSON o no es un objeto | rechazar | texto plano, lista vacía |
+| Tienda con otro formato (`tienda_formato`) | reparar si apunta a una sola tienda: número en texto o decimal entero, prefijo + número (`T`, `tienda`, `store`, `suc`, `id`, `#`…), nombre exacto con o sin "NovaMercado" | E01 `"T05"`, `"5"`; `5.0`, `"tienda-5"`, `"NovaMercado Quetzaltenango"`. El nombre se prueba antes que el número: `"NovaMercado Zona 10"` es la tienda 1, no la 10 |
+| Tienda aproximada (`tienda_aproximada`) | advertir si es la única tienda de una ciudad o el único nombre parecido | `"Cobán"` → 8 |
+| Tienda inexistente o ambigua (`tienda_desconocida`, `tienda_ambigua`) | rechazar | `99`, `5.5`, `true`, `"Guatemala"` (tres tiendas) |
+| Fecha con otro formato sin ambigüedad (`fecha_formato`) | reparar | E04 `"2025-11-17T00:00:00"`, `"17/11/2025"`; `"2025/11/17"`, `"20251117"`, `"17 de noviembre de 2025"`, `"Nov 17, 2025"`, `"11/17/2025"` (17 no puede ser mes) |
+| Fecha ambigua (`fecha_ambigua`) | advertir: día/mes (convención de Guatemala), o año de dos dígitos como 20AA | `"03/04/2026"` → 3 de abril; `"17/11/25"` |
+| Falta tienda o fecha, fecha imposible o fuera de rango (`falta_identidad`, `fecha_invalida`, `fecha_fuera_de_rango`) | rechazar (D12) | `"2025-02-30"`, `"mañana"`, `20251117` (número), tienda 10 antes del 2025-03-15, más de un año después del último dato |
+| Fecha posterior al calendario de feriados (`fecha_sin_calendario`) | advertir: se asume un día sin eventos (D12) | `"2027-01-05"` |
+| El mismo dato en campos sinónimos (`campo_repetido`, `campo_en_conflicto`) | se interpreta cada uno por separado y se comparan los valores **interpretados**: si coinciden, reparar; si difieren, rechazar si es tienda o fecha, o advertir y no usar ninguno si es de un ítem | `"tienda_id": 5` y `"tienda": "T05"` → reparar; `"tienda": "NovaMercado Cobán"` (8) → rechazar; `"familia_id": "lacteos"` y `"familia": "LÁCTEOS"` → reparar |
+| Cuerpo que no es JSON u objeto (`cuerpo_invalido`) | rechazar | vacío, texto plano, comillas simples, `[]`, `42` |
 
-La implementación vive en `src/novamercado/calidad/` (funciones puras con pruebas) y esta tabla se
-actualiza en el mismo PR que cambie una regla.
+**Ítems de la predicción**
+
+| Clase (`regla`) | Política | Ejemplos |
+|---|---|---|
+| Familia escrita de otra forma (`familia_formato`) | reparar si la forma normalizada (sin tildes, minúsculas, separadores como `_`, mojibake corregido, invisibles quitados) coincide con un id o un nombre | E02 `"LÁCTEOS"`, `"lacteos "`, `"Frutas y Verduras"`; `"LÃ¡cteos"`, `"Snacks y dulces"` |
+| Familia parecida (`familia_aproximada`) | advertir si hay un único candidato con similitud ≥ 0.8 y claramente mejor que el segundo | `"lacteo"`, `"panaderias"` |
+| Familia desconocida o elemento inválido (`familia_desconocida`, `item_invalido`) | advertir y excluirla (luego se completa como faltante) | `"ferreteria"`, `42` en la lista |
+| Número como texto o decimal entero (`numero_formato`) | reparar | E03 `"3"`, `2.0`, `"3,0"` |
+| Promoción no entera, negativa, faltante o no numérica (`promocion_imputada`) | advertir e imputar con la última promoción registrada, o 0 (D9) | `2.5`, `-1`, `null`, `"sí"`, ausente |
+| Promoción mayor al máximo histórico de la familia (`promocion_atipica`) | advertir y **conservar el valor**: el modelo lo trata como el máximo, pero el dato real queda registrado para el reentrenamiento | `500`, `"1,000"` |
+| Faltan familias (`faltan_familias`) | advertir y pronosticarlas (D9); si no viene la lista, se pronostican todas | E05 |
+| Familia repetida (`familia_repetida`) | reparar si el valor es el mismo; advertir y elegir según el costo (D10) si difiere | E06 |
+
+**Ítems de las observaciones**
+
+| Clase (`regla`) | Política | Ejemplos |
+|---|---|---|
+| Separador de miles o coma decimal (`numero_formato`) | reparar (D11) | E10 `"1,292"`, `"50,0"`; `"1.234,00"`, `"1 292"` |
+| Ventas negativas (`ventas_negativas`) | advertir y no guardar ese valor | E08 `-4` (devoluciones) |
+| Ventas no enteras, faltantes o no numéricas (`ventas_invalidas`) | advertir y no guardar | `"812,5"`, `12.5`, `null`, `true` |
+| Ventas atípicas (`ventas_atipicas`) | guardar y advertir (más de 3 veces el máximo histórico de la familia) | `50000` |
+| Familia repetida (`familia_repetida`) | reparar si es el mismo valor; advertir y no guardar si difiere | — |
+| Envío repetido | sin observaciones: idempotente, `registros_guardados = 0` (D6) | E09 |
+| Ninguna venta válida (`sin_datos_validos`) | rechazar | todas negativas |
+
+**Generales**
+
+| Clase (`regla`) | Política | Ejemplos |
+|---|---|---|
+| Nombre de campo distinto (`campo_renombrado`) | reparar si es un alias conocido o su forma normalizada coincide; advertir si solo es parecido | E07 `"tienda"`; `"tiendaId"`, `"Tienda_ID"`, `"store_id"`, `"promo"`, `"familia"` |
+| Campo desconocido (`campo_desconocido`) | advertir que se ignoró | `"origen": "pos"` |
+| Formas alternativas (`forma`, `codificacion`) | reparar: lista con una sola solicitud, `{familia: valor}` en vez de lista, cuerpo en Latin-1 | — |
+
+- **Cambios por la revisión del PR #5:** (1) los campos sinónimos se comparaban por su valor crudo,
+  así que `{"tienda_id": 5, "tienda": "5"}` se rechazaba y `{"familia_id": "lacteos", "familia":
+  "LÁCTEOS"}` descartaba el ítem; ahora se comparan los valores interpretados. (2) La promoción
+  atípica se acotaba al máximo histórico: no cambiaba la predicción (el GBM predice lo mismo para 19 y
+  para 500, 27,8537, porque no extrapola) pero sí el `en_promocion` registrado, que el
+  reentrenamiento usa para las fechas nuevas; ahora se conserva.
+- **Verificación:** 134 pruebas de calidad: los 10 ejemplos del catálogo y los 2 válidos publicados
+  (cuando los archivos están), unos 100 casos fuera del catálogo y fuzzing con hypothesis (JSON y
+  bytes arbitrarios y mutaciones de solicitudes válidas: 400 casos por prueba en la CI; una corrida
+  de 5 000 por prueba, 25 000 en total, no encontró ninguna excepción fuera de `Rechazo`). La
+  salida de la limpieza se valida con modelos estrictos de Pydantic (`calidad/esquemas.py`).
+- **Catálogo de prueba:** las pruebas usan un catálogo armado a mano (`tests/catalogo_prueba.py`,
+  con los ids de familia y una ciudad con tres tiendas) porque los archivos publicados no están en
+  el repositorio; `tests/test_calidad_ejemplos.py` corre además sobre los publicados si existen.
 
 ### D9. Familias faltantes: se pronostican con advertencia y la última promoción conocida
 - **Decisión:** si la solicitud omite familias que la tienda vende (E05), se pronostican igual, con
@@ -303,22 +346,32 @@ actualiza en el mismo PR que cambie una regla.
   licores 0.95) y se toma el mayor; en lácteos, carnes, panadería y frutas y verduras (τ entre 0.29 y
   0.45) se toma el menor. Tomar "el primero" o "el último" no tiene ningún respaldo.
 
-### D11. Números con coma: gana la interpretación que da un entero
-- **Decisión:** las ventas son unidades enteras. Si un texto con coma o punto admite dos lecturas
-  (separador de miles o decimal), se repara con la que produce un entero: `"1,292"` → 1292,
-  `"50,0"` → 50. Si ambas o ninguna dan un entero válido, se advierte y no se guarda.
-- **Alternativas:** asumir siempre la convención guatemalteca (punto decimal); rechazar el envío.
+### D11. Números con separadores: tres dígitos son miles, uno o dos son decimales
+- **Decisión:** un separador (`.` o `,`) seguido de exactamente 3 dígitos es de miles; seguido de 1 o
+  2, es decimal. Con los dos tipos de separador, el último es el decimal (`"1.234,50"`). Varios
+  separadores iguales solo pueden ser de miles (`"2,000,000"`). Si el resultado no es entero (las
+  ventas son unidades), se advierte y no se guarda.
+- **Ejemplos:** `"1,292"` → 1292, `"50,0"` → 50, `"812,0"` → 812, `"1.234,00"` → 1234; `"812,5"` y
+  `"1.234,56"` no se guardan.
+- **Alternativas:** asumir siempre la convención guatemalteca (punto decimal); "gana la lectura que
+  da un entero" (la versión propuesta en F0).
 - **Justificación:** el catálogo (E10) muestra ambas convenciones en el mismo envío, así que no hay
-  una convención única; la restricción de que las ventas son enteras resuelve casi todos los casos
-  sin supuestos.
+  una única convención. La regla "la lectura entera" deja ambiguo `"1,000"` (1000 por miles, 1 por
+  decimales): la regla de los tres dígitos lo resuelve sin supuestos, porque nadie escribe unidades
+  con tres decimales.
 
 ### D12. Fechas: nunca el reloj del sistema; rango válido según los datos
-- **Decisión:** ninguna regla usa la fecha de hoy. Una solicitud de pronóstico es válida desde el
-  primer día con historia suficiente hasta el último día de `feriados.csv` (2026-12-31); fuera de ese
-  rango se rechaza. Si faltan observaciones recientes para la fecha pedida, se responde con
-  advertencia indicando la última fecha con datos.
-- **Alternativas:** aceptar cualquier fecha; advertir más allá de `feriados.csv` asumiendo que no hay
-  feriados.
+- **Decisión:** ninguna regla usa la fecha de hoy. Una solicitud de pronóstico es válida desde 28
+  días después del primer día del histórico (2024-03-29, la ventana de nivel) y nunca antes de la
+  apertura de la tienda; una observación, desde el primer día del histórico (y la apertura). El
+  límite superior es un año después del último dato conocido (o el fin de `feriados.csv` si es
+  posterior): más allá, la fecha se considera absurda y se rechaza. Entre el fin de `feriados.csv`
+  (2026-12-31) y ese límite se responde con advertencia: "se asumió un día sin feriados ni fechas
+  especiales". Si faltan observaciones
+  recientes para la fecha pedida, se responde con advertencia indicando la última fecha con datos
+  (lo agrega el servicio en F5, porque necesita la base).
+- **Alternativas:** aceptar cualquier fecha; rechazar todo lo posterior a `feriados.csv` (la versión
+  de F0; si la evaluación cruzara a 2027, todas las solicitudes responderían 422).
 - **Justificación:** el servicio opera sobre fechas simuladas (enunciado). Sin calendario, un
   pronóstico de Navidad o del 31 de diciembre se equivocaría por un factor de 3 a 5
   (`docs/perfil_datos.md`: índice 0.32 en Navidad, 1.69 el 31 de diciembre); el periodo de evaluación

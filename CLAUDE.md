@@ -31,7 +31,9 @@ enunciado, resumido abajo.
 - La limpieza y la política de calidad viven en `src/novamercado/calidad/` como funciones puras con
   pruebas; los endpoints solo orquestan. Ninguna solicitud responde 500 por datos de entrada.
 - La política de cada tipo de problema está en `DECISIONES.md` (D7, D8): código y tabla cambian
-  juntos.
+  juntos. Toda regla nueva lleva prueba en `tests/test_calidad.py`; el fuzzing
+  (`tests/test_calidad_fuzz.py`, `FUZZ_EJEMPLOS=5000` para una corrida larga) debe seguir sin
+  excepciones fuera de `Rechazo`.
 - `datos/publicados/` es la fuente: solo se lee (montada `:ro` en los contenedores) y no va a Git.
   Las credenciales van en `.env` (no se versiona); `.env.example` sí.
 - El modelo vigente es el alias `champion` del Model Registry; solo lo mueve el criterio de
@@ -61,6 +63,9 @@ enunciado, resumido abajo.
   - `modelo/`: `calendario.py`, `variables.py` (misma función para entrenar y predecir), `modelos.py`
     (baseline y GBM), `costos.py` (métrica de negocio y factores), `evaluacion.py` (ventanas),
     `pronosticador.py` (artefacto registrado), `entrenamiento.py` (escalera, MLflow, alias).
+  - `calidad/`: defensa del contrato. `normalizar.py` (texto, campos, enteros, fechas), `catalogo.py`,
+    `solicitudes.py` (`limpiar_prediccion`, `limpiar_observacion`: devuelven la forma canónica y las
+    observaciones, o lanzan `Rechazo`), `esquemas.py` (Pydantic del contrato).
   - `servicio/`: API FastAPI. `inicializador.py`: esquema, carga y primer modelo.
 - `dags/`: DAGs de Airflow 3; solo orquestan funciones de `src/novamercado/`.
 - `docker/`: Dockerfiles. `docker-compose.yml` en la raíz (proyecto `novamercado`).
