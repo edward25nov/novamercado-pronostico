@@ -37,7 +37,11 @@ def main() -> int:
     cfg = config.leer()
     inicio = time.perf_counter()
     esperar_db(cfg.db_url)
-    resumen = carga.preparar_base(cfg.db_url, cfg.datos_dir)
+    try:
+        resumen = carga.preparar_base(cfg.db_url, cfg.datos_dir)
+    except carga.ErrorDatosPublicados as e:
+        log.error("%s", e)
+        return 1
     for archivo, estado in resumen.items():
         log.info("%s: %s", archivo, estado)
     log.info("inicialización terminada en %.1f s", time.perf_counter() - inicio)

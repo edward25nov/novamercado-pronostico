@@ -81,3 +81,27 @@ def test_archivo_invalido_no_carga_nada(con, datos):
     with pytest.raises(carga.ErrorDatosPublicados):
         carga.cargar_publicados(con, datos)
     assert _contar(con, "cargas") == 0  # se valida todo antes de cargar el primero
+
+
+def test_contenido_invalido_conserva_lo_anterior(con, datos):
+    carga.aplicar_esquema(con)
+    ruta = datos / "historico_ventas.csv"
+    ruta.write_text(ruta.read_text().replace("2025-03-16,1,abarrotes,610,0", "2025-03-16,1,abarrotes,-5,0"))
+    with pytest.raises(carga.ErrorDatosPublicados, match=r"historico_ventas.csv: contenido inválido \(.+\)"):
+        carga.cargar_publicados(con, datos)
+    archivos = {f for (f,) in con.execute("SELECT archivo FROM cargas")}
+    assert archivos == {"tiendas.csv", "familias.csv", "costos.csv", "feriados.csv"}
+    assert _contar(con, "tiendas") == 2
+    assert _contar(con, "ventas") == 0  # el histórico se revierte entero y se reintenta luego
+
+
+def test_actualizar_marca_actualizado_en(con, datos):
+    carga.aplicar_esquema(con)
+    carga.cargar_publicados(con, datos)
+    clave = "tienda_id = 1 AND fecha = '2025-03-16' AND familia_id = 'abarrotes'"
+    antes = con.execute(f"SELECT actualizado_en FROM ventas WHERE {clave}").fetchone()[0]
+    ruta = datos / "historico_ventas.csv"
+    ruta.write_text(ruta.read_text().replace("2025-03-16,1,abarrotes,610,0", "2025-03-16,1,abarrotes,615,0"))
+    carga.cargar_publicados(con, datos)
+    despues = con.execute(f"SELECT actualizado_en FROM ventas WHERE {clave}").fetchone()[0]
+    assert despues > antes

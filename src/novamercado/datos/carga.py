@@ -19,7 +19,7 @@ CANDADO_CARGA = 2026_11_15
 
 
 class ErrorDatosPublicados(Exception):
-    """Un archivo publicado falta o no tiene las columnas esperadas."""
+    """Un archivo publicado falta, no tiene las columnas esperadas o su contenido es inválido."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,8 @@ class Archivo:
     fijas: tuple[tuple[str, str], ...] = ()  # columnas que no vienen en el archivo: (columna, valor)
     # Condición extra para actualizar una fila existente (None = siempre)
     actualizar_si: str | None = None
+    # La tabla tiene la columna actualizado_en y se marca al cambiar una fila
+    marca_actualizacion: bool = False
 
 
 # En orden de llaves foráneas.
@@ -44,7 +46,8 @@ ARCHIVOS = (
     Archivo("historico_ventas.csv", "ventas",
             ("fecha", "tienda_id", "familia_id", "ventas", "en_promocion"),
             ("tienda_id", "fecha", "familia_id"),
-            fijas=(("origen", "historico"),), actualizar_si="ventas.origen = 'historico'"),
+            fijas=(("origen", "historico"),), actualizar_si="ventas.origen = 'historico'",
+            marca_actualizacion=True),
 )
 
 
@@ -93,7 +96,8 @@ def _cargar_archivo(con: psycopg.Connection, carpeta: Path, archivo: Archivo, en
     origen = [sql.Identifier(c) for c in encabezado] + [sql.Literal(v) for _, v in archivo.fijas]
     no_llave = [c for c in destino if c not in archivo.llave]
     actualizar = sql.SQL(", ").join(
-        sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in no_llave)
+        [sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in no_llave]
+        + ([sql.SQL("actualizado_en = now()")] if archivo.marca_actualizacion else []))
     # Solo se reescriben las filas que cambian: así `filas` cuenta cambios reales.
     distinto = sql.SQL("({}) IS DISTINCT FROM ({})").format(
         sql.SQL(", ").join(sql.SQL("{}.{}").format(tabla, sql.Identifier(c)) for c in no_llave),
@@ -123,12 +127,19 @@ def cargar_publicados(con: psycopg.Connection, carpeta: Path) -> dict[str, str]:
         if fila and fila[0] == h:
             resumen[archivo.nombre] = "sin cambios"
             continue
-        with con.transaction():
-            filas = _cargar_archivo(con, carpeta, archivo, encabezados[archivo.nombre])
-            con.execute(
-                "INSERT INTO cargas (archivo, huella, filas) VALUES (%s, %s, %s) "
-                "ON CONFLICT (archivo) DO UPDATE SET huella = EXCLUDED.huella, filas = EXCLUDED.filas, "
-                "cargado_en = now()", (archivo.nombre, h, filas))
+        try:
+            with con.transaction():
+                filas = _cargar_archivo(con, carpeta, archivo, encabezados[archivo.nombre])
+                con.execute(
+                    "INSERT INTO cargas (archivo, huella, filas) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (archivo) DO UPDATE SET huella = EXCLUDED.huella, filas = EXCLUDED.filas, "
+                    "cargado_en = now()", (archivo.nombre, h, filas))
+        except psycopg.Error as e:
+            # Contenido inválido (p. ej. ventas negativas, fecha mal escrita): la transacción del
+            # archivo se revierte, los archivos anteriores quedan cargados y en el próximo arranque
+            # se reintenta este (su huella no se registró).
+            motivo = e.diag.message_primary if e.diag and e.diag.message_primary else str(e)
+            raise ErrorDatosPublicados(f"{archivo.nombre}: contenido inválido ({motivo})") from e
         resumen[archivo.nombre] = f"{filas} filas nuevas o modificadas"
     return resumen
 
