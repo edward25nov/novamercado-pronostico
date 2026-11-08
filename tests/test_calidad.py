@@ -165,7 +165,7 @@ def test_falta_tienda_o_fecha_se_rechaza():
 
 
 @pytest.mark.parametrize("valor", ["2025-02-30", "2025-13-01", "mañana", "", 20251117, "17/11", "2024-03-15",
-                                   "2027-01-05", "2099-01-01"])
+                                   "2027-03-01", "2099-01-01"])
 def test_fecha_imposible_o_fuera_de_rango_se_rechaza(valor):
     with pytest.raises(Rechazo):
         limpiar_prediccion(prediccion(fecha=valor), CAT)
@@ -185,13 +185,52 @@ def test_fecha_ambigua_se_interpreta_con_advertencia(valor, esperada):
 def test_tienda_en_dos_campos_con_valores_distintos_se_rechaza():
     with pytest.raises(Rechazo, match="distintos"):
         limpiar_prediccion(prediccion(tienda=4), CAT)
+    with pytest.raises(Rechazo, match="distintos"):
+        limpiar_prediccion(prediccion(tienda="NovaMercado Cobán"), CAT)  # 5 contra 8
 
 
-def test_tienda_en_dos_campos_con_el_mismo_valor_se_repara():
-    assert _pred(prediccion(tienda=5))[2] == "corregido"
-    # Se comparan los valores recibidos: 5 y "T05" se tratan como conflicto (conservador)
-    with pytest.raises(Rechazo):
-        limpiar_prediccion(prediccion(tienda="T05"), CAT)
+# Campos sinónimos: se comparan los valores ya interpretados (revisión del PR #5)
+@pytest.mark.parametrize("extra", [{"tienda": 5}, {"tienda": "5"}, {"tienda": "T05"}])
+def test_tienda_en_dos_campos_con_el_mismo_valor_se_repara(extra):
+    sol, obs, est, _ = _pred(prediccion(**extra))
+    assert sol.tienda_id == 5 and est == "corregido"
+
+
+def test_fecha_en_dos_campos_con_el_mismo_valor_se_repara():
+    sol, obs, est, _ = _pred(prediccion(date="2025-11-17T00:00:00"))
+    assert str(sol.fecha) == "2025-11-17" and est == "corregido"
+
+
+def test_fecha_en_dos_campos_distintos_se_rechaza():
+    with pytest.raises(Rechazo, match="distintos"):
+        limpiar_prediccion(prediccion(date="2025-11-18"), CAT)
+
+
+def test_familia_en_dos_campos_equivalentes_se_repara():
+    cuerpo = prediccion()
+    cuerpo["familias"][2] = {"familia_id": "lacteos", "familia": "LÁCTEOS", "en_promocion": 4}
+    _, obs, est, promos = _pred(cuerpo)
+    assert promos["lacteos"] == 4 and est == "corregido"
+
+
+def test_familia_en_dos_campos_distintos_se_excluye():
+    cuerpo = prediccion()
+    cuerpo["familias"][2] = {"familia_id": "lacteos", "familia": "carnes", "en_promocion": 4}
+    _, obs, est, promos = _pred(cuerpo)
+    assert est == "advertencia" and any(o.regla == "campo_en_conflicto" for o in obs)
+    assert promos["lacteos"] == 0  # no se usó el ítem: lacteos quedó como faltante
+
+
+def test_promocion_en_dos_campos_equivalentes_se_repara():
+    cuerpo = prediccion()
+    cuerpo["familias"][1] = {"familia_id": "bebidas", "en_promocion": 8, "promo": "8"}
+    assert _pred(cuerpo)[3]["bebidas"] == 8
+
+
+def test_fecha_despues_del_calendario_se_atiende_con_advertencia():
+    sol, obs, est, _ = _pred(prediccion(fecha="2027-01-05"))
+    assert str(sol.fecha) == "2027-01-05" and est == "advertencia"
+    assert [o.regla for o in obs] == ["fecha_sin_calendario"]
 
 
 @pytest.mark.parametrize("cuerpo", [b"", b"no es json", b"{'tienda_id': 5}", b"[]", b"[1,2]", b"42", b"null",
@@ -252,11 +291,13 @@ def test_promocion_ausente_se_imputa():
     assert promos["bebidas"] == 0 and est == "advertencia"
 
 
-def test_promocion_atipica_se_acota_con_advertencia():
+def test_promocion_atipica_se_conserva_con_advertencia():
+    # Se conserva el valor real: el modelo lo trata como el máximo, pero el reentrenamiento ve el dato
     cuerpo = prediccion()
-    cuerpo["familias"][1]["en_promocion"] = 500
+    cuerpo["familias"][1]["en_promocion"] = "1,000"
     _, obs, est, promos = _pred(cuerpo)
-    assert promos["bebidas"] == 19 and est == "advertencia"
+    assert promos["bebidas"] == 1000 and est == "advertencia"
+    assert "el modelo lo trata como 19" in obs[0].detalle
 
 
 def test_familias_como_objeto_o_lista_de_nombres():

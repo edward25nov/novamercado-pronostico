@@ -27,7 +27,7 @@ def cat():
     resumen = h.groupby("familia_id").agg(promo_max=("en_promocion", "max"), ventas_max=("ventas", "max")).reset_index()
     return Catalogo.desde_tablas(pd.read_csv(DATOS / "tiendas.csv"), pd.read_csv(DATOS / "familias.csv"),
                                  pd.read_csv(DATOS / "costos.csv"), pd.read_csv(DATOS / "feriados.csv"),
-                                 resumen, h["fecha"].min())
+                                 resumen, h["fecha"].min(), h["fecha"].max())
 
 
 @pytest.mark.parametrize("nombre", sorted(ESPERADO))

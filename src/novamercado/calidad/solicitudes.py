@@ -46,9 +46,6 @@ ITEM_PREDICCION = ("familia_id", "en_promocion")
 RAIZ_OBSERVACION = ("tienda_id", "fecha", "ventas")
 ITEM_OBSERVACION = ("familia_id", "ventas")
 
-_CONFLICTO = object()  # dos campos que significan lo mismo con valores distintos
-
-
 class Objeto(dict):
     """dict que recuerda las claves repetidas del JSON (json.loads se queda con la última)."""
 
@@ -105,38 +102,62 @@ def _canonico(nombre: str, permitidos: tuple[str, ...]) -> tuple[str | None, boo
     return parecido, parecido is not None
 
 
-def _mapear(obj: dict, permitidos: tuple[str, ...], prefijo: str, reg: Registro,
-            identidad: frozenset = frozenset()) -> dict[str, tuple[object, str]]:
-    """Campos recibidos -> {canónico: (valor, nombre recibido)}, con observaciones."""
+Candidatos = list[tuple[object, str]]  # (valor, ruta del campo recibido)
+
+
+def _mapear(obj: dict, permitidos: tuple[str, ...], prefijo: str, reg: Registro) -> dict[str, Candidatos]:
+    """Campos recibidos -> {canónico: [(valor, ruta), ...]}. Varios candidatos = el mismo dato vino en
+    campos sinónimos (o repetido); se resuelven después comparando los valores ya interpretados."""
     pares = list(obj.items()) + list(getattr(obj, "repetidas", []))
-    out: dict[str, tuple[object, str]] = {}
+    out: dict[str, Candidatos] = {}
     for nombre, valor in pares:
         ruta = f"{prefijo}{nombre}"
-        if not isinstance(nombre, str):
-            reg.advertir(ruta, f"se ignoró el campo {nombre!r}", "campo_desconocido")
-            continue
-        canon, aproximado = _canonico(nombre, permitidos)
+        canon, aproximado = _canonico(nombre, permitidos) if isinstance(nombre, str) else (None, False)
         if canon is None:
             reg.advertir(ruta, f"se ignoró el campo desconocido '{nombre}'", "campo_desconocido")
-            continue
-        if canon in out:
-            previo, nombre_previo = out[canon]
-            if previo is _CONFLICTO or previo != valor:
-                if canon in identidad:
-                    raise Rechazo(f"'{nombre_previo}' y '{nombre}' indican {canon} distintos "
-                                  f"({previo!r} y {valor!r})", ruta, "campo_en_conflicto")
-                reg.advertir(ruta, f"'{nombre_previo}' y '{nombre}' indican {canon} distintos; "
-                             "no se usó ninguno", "campo_en_conflicto")
-                out[canon] = (_CONFLICTO, nombre_previo)
-            else:
-                reg.reparar(ruta, f"'{canon}' venía repetido con el mismo valor", "campo_repetido")
             continue
         if aproximado:
             reg.advertir(ruta, f"el campo '{nombre}' se interpretó como '{canon}'", "campo_renombrado")
         elif nombre != canon:
             reg.reparar(ruta, f"el campo '{nombre}' se interpretó como '{canon}'", "campo_renombrado")
-        out[canon] = (valor, nombre)
+        out.setdefault(canon, []).append((valor, ruta))
     return out
+
+
+_INVALIDO = object()
+
+
+def _resolver(candidatos: Candidatos, interpretar, reg: Registro, canon: str, identidad: bool,
+              clave_igualdad=lambda v: v):
+    """Interpreta cada candidato por separado y compara los valores interpretados (D8).
+
+    Un solo candidato: su interpretación. Varios que coinciden: se repara. Varios distintos (o alguno
+    que no se puede interpretar): se rechaza si es de identidad; si es de un ítem se advierte y se
+    devuelve None (como si no hubiera venido).
+    """
+    if len(candidatos) == 1:
+        return interpretar(*candidatos[0], reg)
+    resultados = []
+    for valor, ruta in candidatos:
+        sub = Registro()
+        try:
+            r = interpretar(valor, ruta, sub)
+        except Rechazo:
+            r = _INVALIDO
+        resultados.append((r, valor, ruta, sub))
+    claves = [None if r is _INVALIDO or r is None else clave_igualdad(r) for r, *_ in resultados]
+    if None not in claves and all(c == claves[0] for c in claves):
+        primero = resultados[0]
+        reg.observaciones.extend(primero[3].observaciones)
+        for *_, ruta, _ in resultados[1:]:
+            reg.reparar(ruta, f"'{ruta}' repetía {canon} con el mismo valor que '{primero[2]}'", "campo_repetido")
+        return primero[0]
+    detalle = ", ".join(f"'{ruta}': {valor!r}" for _, valor, ruta, _ in resultados)
+    if identidad:
+        raise Rechazo(f"campos con {canon} distintos ({detalle})", resultados[0][2], "campo_en_conflicto")
+    reg.advertir(resultados[-1][2], f"campos con {canon} distintos ({detalle}); no se usó ninguno",
+                 "campo_en_conflicto")
+    return None
 
 
 # --- identidad: tienda y fecha
@@ -145,16 +166,10 @@ PREFIJOS_TIENDA = {"", "t", "tienda", "store", "st", "suc", "sucursal", "id", "n
                    "local", "tda"}
 
 
-def _tienda(entrada, cat: Catalogo, reg: Registro) -> int:
-    if entrada is None:
-        raise Rechazo("falta 'tienda_id'", "tienda_id", "falta_identidad")
-    valor, nombre = entrada
-    ruta = nombre
-    if valor is _CONFLICTO:
-        raise Rechazo("tienda en conflicto", ruta, "campo_en_conflicto")
+def _tienda_valor(valor, ruta: str, cat: Catalogo, reg: Registro) -> int:
     if isinstance(valor, str):
         texto, _ = N.limpiar_texto(valor)
-        candidato, nota = None, None
+        candidato = None
         if texto.isdigit():
             candidato = int(texto)
         else:
@@ -191,12 +206,13 @@ def _tienda(entrada, cat: Catalogo, reg: Registro) -> int:
     return candidato
 
 
-def _fecha(entrada, desde, hasta, reg: Registro):
-    if entrada is None:
-        raise Rechazo("falta 'fecha' (AAAA-MM-DD)", "fecha", "falta_identidad")
-    valor, ruta = entrada
-    if valor is _CONFLICTO:
-        raise Rechazo("fecha en conflicto", ruta, "campo_en_conflicto")
+def _tienda(cands: Candidatos | None, cat: Catalogo, reg: Registro) -> int:
+    if not cands:
+        raise Rechazo("falta 'tienda_id'", "tienda_id", "falta_identidad")
+    return _resolver(cands, lambda v, r, g: _tienda_valor(v, r, cat, g), reg, "tienda_id", identidad=True)
+
+
+def _fecha_valor(valor, ruta: str, desde, hasta_calendario, hasta, reg: Registro):
     f, nota, supuesto, motivo = N.fecha(valor)
     if f is None:
         raise Rechazo(f"fecha inválida: {motivo}", ruta, "fecha_invalida")
@@ -207,32 +223,63 @@ def _fecha(entrada, desde, hasta, reg: Registro):
         reg.advertir(ruta, supuesto, "fecha_ambigua")
     elif nota:
         reg.reparar(ruta, nota, "fecha_formato")
+    if hasta_calendario is not None and f > hasta_calendario:
+        reg.advertir(ruta, f"{f.isoformat()} es posterior al calendario de feriados "
+                     f"({hasta_calendario.isoformat()}); se asumió un día sin feriados ni fechas especiales",
+                     "fecha_sin_calendario")
     return f
+
+
+def _fecha(cands: Candidatos | None, desde, hasta_calendario, hasta, reg: Registro):
+    if not cands:
+        raise Rechazo("falta 'fecha' (AAAA-MM-DD)", "fecha", "falta_identidad")
+    return _resolver(cands, lambda v, r, g: _fecha_valor(v, r, desde, hasta_calendario, hasta, g), reg,
+                     "fecha", identidad=True)
 
 
 # --- ítems
 
-def _items(entrada, nombre_item: str, reg: Registro) -> list[tuple[str, object]]:
+def _items(cands: Candidatos | None, nombre_item: str, reg: Registro) -> list[tuple[str, object]]:
     """Lista de (ruta, ítem). Acepta la lista del contrato, un objeto {familia: valor} o una lista de
-    nombres de familia."""
-    if entrada is None:
-        return []
-    valor, nombre = entrada
-    if valor is _CONFLICTO or valor is None:
-        return []
-    if isinstance(valor, dict):
-        reg.reparar(nombre, f"'{nombre}' venía como objeto {{familia: valor}}; se leyó como lista", "forma")
-        return [(f"{nombre}.{k}", {"familia_id": k, nombre_item: v}) for k, v in valor.items()]
-    if not isinstance(valor, list):
-        reg.advertir(nombre, f"'{nombre}' no es una lista; se ignoró", "forma")
-        return []
-    if len(valor) > MAX_ITEMS:
-        raise Rechazo(f"'{nombre}' trae {len(valor)} elementos (máximo {MAX_ITEMS})", nombre, "forma")
-    return [(f"{nombre}[{i}]", it) for i, it in enumerate(valor)]
+    nombres de familia. Si la lista vino en dos campos sinónimos, se usan los elementos de ambos (las
+    familias repetidas se resuelven después)."""
+    items = []
+    for valor, nombre in cands or []:
+        if valor is None:
+            continue
+        if isinstance(valor, dict):
+            reg.reparar(nombre, f"'{nombre}' venía como objeto {{familia: valor}}; se leyó como lista", "forma")
+            items += [(f"{nombre}.{k}", {"familia_id": k, nombre_item: v}) for k, v in valor.items()]
+        elif isinstance(valor, list):
+            items += [(f"{nombre}[{i}]", it) for i, it in enumerate(valor)]
+        else:
+            reg.advertir(nombre, f"'{nombre}' no es una lista; se ignoró", "forma")
+    if len(items) > MAX_ITEMS:
+        raise Rechazo(f"la solicitud trae {len(items)} elementos (máximo {MAX_ITEMS})", "familias", "forma")
+    return items
+
+
+def _familia_valor(valor, ruta: str, cat: Catalogo, reg: Registro) -> str | None:
+    if not isinstance(valor, str):
+        reg.advertir(ruta, f"familia {valor!r} no es un texto; se ignoró", "familia_desconocida")
+        return None
+    texto = N.limpiar_texto(valor)[0]
+    fid = cat.familia_exacta(texto)
+    if fid is not None:
+        if valor != fid:
+            reg.reparar(ruta, f"'{valor}' se interpretó como '{fid}'", "familia_formato")
+        return fid
+    fid = cat.familia_parecida(texto)
+    if fid is not None:
+        reg.advertir(ruta, f"'{valor}' no es una familia del catálogo; se interpretó como '{fid}' por parecido",
+                     "familia_aproximada")
+        return fid
+    reg.advertir(ruta, f"la familia '{valor}' no existe en el catálogo; se ignoró", "familia_desconocida")
+    return None
 
 
 def _familia(item, ruta: str, cat: Catalogo, reg: Registro, permitidos) -> tuple[str | None, dict]:
-    """Devuelve (familia_id o None si se excluye, campos del ítem)."""
+    """Devuelve (familia_id o None si se excluye, candidatos de los campos del ítem)."""
     if isinstance(item, str):
         item = {"familia_id": item}
         reg.reparar(ruta, "el elemento era solo el nombre de la familia", "forma")
@@ -240,26 +287,12 @@ def _familia(item, ruta: str, cat: Catalogo, reg: Registro, permitidos) -> tuple
         reg.advertir(ruta, f"elemento {item!r} no es un objeto; se ignoró", "item_invalido")
         return None, {}
     campos = _mapear(item, permitidos, f"{ruta}.", reg)
-    if "familia_id" not in campos or campos["familia_id"][0] in (None, _CONFLICTO):
+    if not campos.get("familia_id"):
         reg.advertir(ruta, "elemento sin familia_id; se ignoró", "familia_desconocida")
         return None, campos
-    valor, nombre = campos["familia_id"]
-    r = f"{ruta}.{nombre}"
-    if not isinstance(valor, str):
-        reg.advertir(r, f"familia {valor!r} no es un texto; se ignoró", "familia_desconocida")
-        return None, campos
-    fid = cat.familia_exacta(N.limpiar_texto(valor)[0])
-    if fid is not None:
-        if valor != fid:
-            reg.reparar(r, f"'{valor}' se interpretó como '{fid}'", "familia_formato")
-        return fid, campos
-    fid = cat.familia_parecida(N.limpiar_texto(valor)[0])
-    if fid is not None:
-        reg.advertir(r, f"'{valor}' no es una familia del catálogo; se interpretó como '{fid}' por parecido",
-                     "familia_aproximada")
-        return fid, campos
-    reg.advertir(r, f"la familia '{valor}' no existe en el catálogo; se ignoró", "familia_desconocida")
-    return None, campos
+    fid = _resolver(campos["familia_id"], lambda v, r, g: _familia_valor(v, r, cat, g), reg, "familia_id",
+                    identidad=False)
+    return fid, campos
 
 
 @dataclass
@@ -269,13 +302,7 @@ class _Promo:
     motivo: str | None = None
 
 
-def _promocion(campos, ruta_item: str, fid: str, cat: Catalogo, reg: Registro) -> _Promo:
-    if "en_promocion" not in campos:
-        return _Promo(None, f"{ruta_item}.en_promocion", "no viene")
-    valor, nombre = campos["en_promocion"]
-    ruta = f"{ruta_item}.{nombre}"
-    if valor is _CONFLICTO:
-        return _Promo(None, ruta, "venía en conflicto")
+def _promo_valor(valor, ruta: str, fid: str, cat: Catalogo, reg: Registro) -> _Promo:
     n, nota, motivo = N.entero(valor)
     if n is None:
         return _Promo(None, ruta, motivo)
@@ -283,12 +310,29 @@ def _promocion(campos, ruta_item: str, fid: str, cat: Catalogo, reg: Registro) -
         return _Promo(None, ruta, f"{n} es negativo")
     tope = cat.promo_max.get(fid)
     if tope is not None and n > tope:
-        reg.advertir(ruta, f"{n} supera el máximo histórico de la familia ({tope}); se usó {tope}",
-                     "promocion_atipica")
-        return _Promo(tope, ruta)
-    if nota:
+        # Se conserva el valor: el modelo lo trata como el máximo visto, pero el dato real queda
+        # registrado para el reentrenamiento (revisión del PR #5).
+        reg.advertir(ruta, f"{n} supera el máximo histórico de la familia ({tope}); el modelo lo trata como "
+                     f"{tope}", "promocion_atipica")
+    elif nota:
         reg.reparar(ruta, nota, "numero_formato")
     return _Promo(n, ruta)
+
+
+def _promocion(campos, ruta_item: str, fid: str, cat: Catalogo, reg: Registro) -> _Promo:
+    cands = campos.get("en_promocion")
+    if not cands:
+        return _Promo(None, f"{ruta_item}.en_promocion", "no viene")
+    p = _resolver(cands, lambda v, r, g: _promo_valor(v, r, fid, cat, g), reg, "en_promocion", identidad=False,
+                  clave_igualdad=lambda x: x.valor)
+    if p is None:
+        return _Promo(None, cands[-1][1], "venía en campos con valores distintos")
+    return p
+
+
+def _limites(cat: Catalogo, tienda: int, desde):
+    """(desde, último día con calendario, último día aceptable) para una tienda (D12)."""
+    return max(desde, cat.tiendas[tienda].fecha_apertura), cat.fecha_max_calendario, cat.fecha_max_aceptada
 
 
 def limpiar_prediccion(cuerpo, cat: Catalogo,
@@ -298,10 +342,9 @@ def limpiar_prediccion(cuerpo, cat: Catalogo,
     registrada (D9), o None."""
     reg = Registro()
     obj = _raiz(leer_cuerpo(cuerpo, reg), reg)
-    campos = _mapear(obj, RAIZ_PREDICCION, "", reg, identidad=frozenset({"tienda_id", "fecha"}))
+    campos = _mapear(obj, RAIZ_PREDICCION, "", reg)
     tienda = _tienda(campos.get("tienda_id"), cat, reg)
-    f = _fecha(campos.get("fecha"), max(cat.fecha_min_prediccion, cat.tiendas[tienda].fecha_apertura),
-               cat.fecha_max_calendario, reg)
+    f = _fecha(campos.get("fecha"), *_limites(cat, tienda, cat.fecha_min_prediccion), reg)
     if "familias" not in campos:
         reg.advertir("familias", "no vino la lista de familias; se pronosticaron todas", "faltan_familias")
 
@@ -346,42 +389,46 @@ def limpiar_prediccion(cuerpo, cat: Catalogo,
     return PrediccionCanonica(tienda_id=tienda, fecha=f, familias=familias), reg.observaciones
 
 
+def _ventas_valor(valor, ruta: str, fid: str, cat: Catalogo, reg: Registro) -> int | None:
+    n, nota, motivo = N.entero(valor)
+    if n is None:
+        reg.advertir(ruta, f"ventas de '{fid}' inválidas ({motivo}); no se guardó", "ventas_invalidas")
+        return None
+    if n < 0:
+        reg.advertir(ruta, f"ventas de '{fid}' negativas ({n}, p. ej. devoluciones); no se guardó",
+                     "ventas_negativas")
+        return None
+    if nota:
+        reg.reparar(ruta, nota, "numero_formato")
+    tope = cat.ventas_max.get(fid)
+    if tope and n > FACTOR_ATIPICO * tope:
+        reg.advertir(ruta, f"{n} es más de {FACTOR_ATIPICO} veces el máximo histórico de '{fid}' ({tope}); "
+                     "se guardó tal cual", "ventas_atipicas")
+    return n
+
+
 def limpiar_observacion(cuerpo, cat: Catalogo) -> tuple[ObservacionCanonica, list[Observacion]]:
     """Política para POST /v1/observaciones. Nunca guarda un valor que no sea una venta entera no
     negativa inequívoca (no inventa datos)."""
     reg = Registro()
     obj = _raiz(leer_cuerpo(cuerpo, reg), reg)
-    campos = _mapear(obj, RAIZ_OBSERVACION, "", reg, identidad=frozenset({"tienda_id", "fecha"}))
+    campos = _mapear(obj, RAIZ_OBSERVACION, "", reg)
     tienda = _tienda(campos.get("tienda_id"), cat, reg)
-    f = _fecha(campos.get("fecha"), max(cat.fecha_min_datos, cat.tiendas[tienda].fecha_apertura),
-               cat.fecha_max_calendario, reg)
+    desde, _, hasta = _limites(cat, tienda, cat.fecha_min_datos)
+    f = _fecha(campos.get("fecha"), desde, None, hasta, reg)
     vistos: dict[str, list[tuple[int | None, str]]] = {}
     for ruta, item in _items(campos.get("ventas"), "ventas", reg):
         fid, cs = _familia(item, ruta, cat, reg, ITEM_OBSERVACION)
         if fid is None:
             continue
-        if "ventas" not in cs:
+        cands = cs.get("ventas")
+        if not cands:
             reg.advertir(f"{ruta}.ventas", f"'{fid}' sin ventas; no se guardó", "ventas_invalidas")
             vistos.setdefault(fid, []).append((None, ruta))
             continue
-        valor, nombre = cs["ventas"]
-        r = f"{ruta}.{nombre}"
-        n, nota, motivo = N.entero(valor) if valor is not _CONFLICTO else (None, None, "venía en conflicto")
-        if n is None:
-            reg.advertir(r, f"ventas de '{fid}' inválidas ({motivo}); no se guardó", "ventas_invalidas")
-            n = None
-        elif n < 0:
-            reg.advertir(r, f"ventas de '{fid}' negativas ({n}, p. ej. devoluciones); no se guardó",
-                         "ventas_negativas")
-            n = None
-        else:
-            if nota:
-                reg.reparar(r, nota, "numero_formato")
-            tope = cat.ventas_max.get(fid)
-            if tope and n > FACTOR_ATIPICO * tope:
-                reg.advertir(r, f"{n} es más de {FACTOR_ATIPICO} veces el máximo histórico de '{fid}' ({tope}); "
-                             "se guardó tal cual", "ventas_atipicas")
-        vistos.setdefault(fid, []).append((n, r))
+        n = _resolver(cands, lambda v, r, g, fid=fid: _ventas_valor(v, r, fid, cat, g), reg, "ventas",
+                      identidad=False)
+        vistos.setdefault(fid, []).append((n, cands[-1][1]))
 
     ventas = []
     for fid, valores in vistos.items():

@@ -30,7 +30,7 @@ def catalogo() -> Catalogo:
                           columns=["familia_id", "costo_faltante", "costo_sobrante"])
     feriados = pd.DataFrame({"fecha": ["2024-03-28", "2026-12-31"]})
     resumen = pd.DataFrame([(f, 19, 3000) for f in FAMILIAS], columns=["familia_id", "promo_max", "ventas_max"])
-    return Catalogo.desde_tablas(tiendas, familias, costos, feriados, resumen, date(2024, 3, 1))
+    return Catalogo.desde_tablas(tiendas, familias, costos, feriados, resumen, date(2024, 3, 1), date(2026, 2, 28))
 
 
 def prediccion(**cambios) -> dict:

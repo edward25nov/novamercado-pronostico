@@ -15,6 +15,8 @@ from novamercado.calidad.normalizar import clave
 
 # Historia mínima antes de la primera fecha que se puede pronosticar (D12): la ventana de 28 días.
 DIAS_HISTORIA_MINIMA = 28
+# Más allá de este horizonte desde el último dato, una fecha se considera absurda y se rechaza (D12).
+DIAS_HORIZONTE_MAXIMO = 365
 SIMILITUD_MINIMA = 0.8
 
 
@@ -35,6 +37,7 @@ class Catalogo:
     ventas_max: dict[str, int]               # máximo histórico de ventas por familia
     fecha_min_datos: date                    # primer día del histórico
     fecha_max_calendario: date               # último día de feriados.csv
+    fecha_max_datos: date                    # último día con ventas conocidas
     _claves_familia: dict[str, str] = field(default_factory=dict, repr=False)
     _claves_tienda: dict[str, int] = field(default_factory=dict, repr=False)
 
@@ -50,6 +53,12 @@ class Catalogo:
     @property
     def fecha_min_prediccion(self) -> date:
         return self.fecha_min_datos + timedelta(days=DIAS_HISTORIA_MINIMA)
+
+    @property
+    def fecha_max_aceptada(self) -> date:
+        """Último día que se atiende: un año después del último dato (o el calendario, si va más allá).
+        Entre el fin del calendario y este día se responde con advertencia (D12)."""
+        return max(self.fecha_max_calendario, self.fecha_max_datos + timedelta(days=DIAS_HORIZONTE_MAXIMO))
 
     # --- familias
 
@@ -79,7 +88,8 @@ class Catalogo:
 
     @classmethod
     def desde_tablas(cls, tiendas: pd.DataFrame, familias: pd.DataFrame, costos: pd.DataFrame,
-                     feriados: pd.DataFrame, resumen_ventas: pd.DataFrame, fecha_min_datos) -> "Catalogo":
+                     feriados: pd.DataFrame, resumen_ventas: pd.DataFrame, fecha_min_datos,
+                     fecha_max_datos) -> "Catalogo":
         """resumen_ventas: familia_id, promo_max, ventas_max."""
         c = costos.set_index("familia_id")
         r = resumen_ventas.set_index("familia_id")
@@ -94,6 +104,7 @@ class Catalogo:
             ventas_max={f: int(r.loc[f, "ventas_max"]) for f in r.index},
             fecha_min_datos=pd.Timestamp(fecha_min_datos).date(),
             fecha_max_calendario=pd.to_datetime(feriados["fecha"]).max().date(),
+            fecha_max_datos=pd.Timestamp(fecha_max_datos).date(),
         )
 
 
