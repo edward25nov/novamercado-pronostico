@@ -19,7 +19,7 @@ from novamercado.modelo import variables as V
 ARCHIVO = "pronosticador.pkl"
 # Sube cuando cambian los atributos del Pronosticador; __setstate__ completa los que falten en
 # artefactos de versiones anteriores, para que un champion viejo siga cargando.
-VERSION_FORMATO = 1
+VERSION_FORMATO = 2  # 2: GBM.columnas (F5); los atributos nuevos tienen valor por defecto al cargar
 
 
 @dataclass

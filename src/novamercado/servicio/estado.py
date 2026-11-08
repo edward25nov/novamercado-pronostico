@@ -35,6 +35,7 @@ class ModeloVigente:
     alias: str
     version: str
     origen: str  # "mlflow" | "cache"
+    run_id: str = ""  # identifica el modelo aunque el Registry vuelva a numerar (D17)
 
 
 class Cargador:
@@ -48,37 +49,42 @@ class Cargador:
     def desde_cache(self) -> ModeloVigente | None:
         try:
             info = json.loads(self.indice.read_text())
-            ruta = self.carpeta / "modelos" / info["version"] / ARCHIVO
-            return ModeloVigente(Pronosticador.cargar(ruta), info["nombre"], info["alias"], info["version"], "cache")
+            ruta = self.carpeta / "modelos" / info["carpeta"] / ARCHIVO
+            return ModeloVigente(Pronosticador.cargar(ruta), info["nombre"], info["alias"], info["version"], "cache",
+                                 info.get("run_id", ""))
         except (OSError, ValueError, KeyError, EOFError) as e:
             log.info("sin modelo en caché (%s)", type(e).__name__)
             return None
 
-    def _cargar_version(self, version: str) -> ModeloVigente:
-        destino = self.carpeta / "modelos" / version
+    def _cargar_version(self, version: str, run_id: str) -> ModeloVigente:
+        # La carpeta lleva el run_id: si se pierde el volumen de MLflow y una "v1" nueva aparece, no se
+        # confunde con la v1 vieja de la caché (revisión del PR #6).
+        carpeta = f"{version}-{run_id}" if run_id else version
+        destino = self.carpeta / "modelos" / carpeta
         archivo = destino / ARCHIVO
         if archivo.is_file():
             p = Pronosticador.cargar(archivo)
         else:
-            temporal = self.carpeta / "modelos" / f".{version}.descarga"
+            temporal = self.carpeta / "modelos" / f".{carpeta}.descarga"
             p = entrenamiento.descargar(self.cfg.mlflow_uri, version, temporal)
             p.guardar(destino)
             shutil.rmtree(temporal, ignore_errors=True)
         self.carpeta.mkdir(parents=True, exist_ok=True)
         tmp = self.indice.with_suffix(".tmp")
         tmp.write_text(json.dumps({"nombre": entrenamiento.NOMBRE_MODELO, "alias": entrenamiento.ALIAS,
-                                   "version": version}))
+                                   "version": version, "run_id": run_id, "carpeta": carpeta}))
         os.replace(tmp, self.indice)  # atómico: nunca queda un índice a medias
-        return ModeloVigente(p, entrenamiento.NOMBRE_MODELO, entrenamiento.ALIAS, version, "mlflow")
+        return ModeloVigente(p, entrenamiento.NOMBRE_MODELO, entrenamiento.ALIAS, version, "mlflow", run_id)
 
     def actualizar(self, actual: ModeloVigente | None) -> tuple[ModeloVigente | None, str | None]:
         """(modelo a usar, motivo si no hay). Lanza excepción si MLflow no responde."""
-        version = entrenamiento.version_vigente(self.cfg.mlflow_uri)
-        if version is None:
+        champion = entrenamiento.vigente(self.cfg.mlflow_uri)
+        if champion is None:
             return actual, "todavía no hay un modelo con el alias champion (el primer arranque lo entrena)"
-        if actual is not None and actual.version == version:
+        version, run_id = champion
+        if actual is not None and actual.version == version and actual.run_id == run_id:
             return actual, None
-        nuevo = self._cargar_version(version)
+        nuevo = self._cargar_version(version, run_id)
         log.info("modelo vigente: versión %s (antes %s)", version, actual.version if actual else "ninguna")
         return nuevo, None
 

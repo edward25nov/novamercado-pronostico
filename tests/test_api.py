@@ -364,7 +364,7 @@ def test_health_ok_y_degradado(entorno):
 # --- Cargador: caché y recarga
 
 
-def test_cargador_usa_cache_y_recarga_solo_si_cambia_la_version(entorno, tmp_path, monkeypatch):
+def test_cargador_usa_cache_y_recarga_solo_si_cambia_el_modelo(entorno, tmp_path, monkeypatch):
     _, _, cfg, p = entorno
     from dataclasses import replace
 
@@ -376,20 +376,24 @@ def test_cargador_usa_cache_y_recarga_solo_si_cambia_la_version(entorno, tmp_pat
         return p
 
     monkeypatch.setattr(entrenamiento, "descargar", descargar)
-    vigente = {"v": "3"}
-    monkeypatch.setattr(entrenamiento, "version_vigente", lambda uri: vigente["v"])
+    vigente = {"v": ("3", "run-a")}
+    monkeypatch.setattr(entrenamiento, "vigente", lambda uri: vigente["v"])
     c = Cargador(cfg)
     m, motivo = c.actualizar(None)
-    assert m.version == "3" and motivo is None and descargas == ["3"]
-    assert c.actualizar(m)[0] is m and descargas == ["3"]  # misma versión: no descarga
-    vigente["v"] = "4"
+    assert (m.version, m.run_id) == ("3", "run-a") and motivo is None and descargas == ["3"]
+    assert c.actualizar(m)[0] is m and descargas == ["3"]  # mismo modelo: no descarga
+    vigente["v"] = ("4", "run-b")
     m4, _ = c.actualizar(m)
     assert m4.version == "4" and descargas == ["3", "4"]
-    # Otro arranque sin MLflow: la caché tiene la última versión cargada
+    # Otro arranque sin MLflow: la caché tiene el último modelo cargado
     en_cache = Cargador(cfg).desde_cache()
-    assert en_cache.version == "4" and en_cache.origen == "cache"
+    assert (en_cache.version, en_cache.run_id, en_cache.origen) == ("4", "run-b", "cache")
+    # Se perdió el volumen de MLflow: una "v4" nueva con otro run no usa la carpeta vieja
+    vigente["v"] = ("4", "run-c")
+    m4c, _ = c.actualizar(m4)
+    assert m4c.run_id == "run-c" and descargas == ["3", "4", "4"]
     vigente["v"] = None
-    assert c.actualizar(m4)[0] is m4  # sin champion en MLflow: se conserva el que hay
+    assert c.actualizar(m4c)[0] is m4c  # sin champion en MLflow: se conserva el que hay
 
 
 def test_estado_conserva_el_modelo_si_mlflow_falla(entorno, monkeypatch):
@@ -400,7 +404,7 @@ def test_estado_conserva_el_modelo_si_mlflow_falla(entorno, monkeypatch):
     def caido(uri):
         raise ConnectionError("MLflow caído")
 
-    monkeypatch.setattr(entrenamiento, "version_vigente", caido)
+    monkeypatch.setattr(entrenamiento, "vigente", caido)
     monkeypatch.setattr(
         "novamercado.servicio.dependencias.revisar_todas", lambda c: {"db": None, "mlflow": None, "airflow": None}
     )

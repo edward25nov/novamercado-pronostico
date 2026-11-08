@@ -82,6 +82,12 @@ class GBM:
         self.ratio_max: float | None = None
         self.columnas: list[str] = []
 
+    def __setstate__(self, estado: dict):
+        # Compatibilidad con artefactos anteriores (D24): atributos agregados después de F3.
+        # columnas = [] significa "todas las de la entrada" (como entrenaban las versiones de F3).
+        base = {"columnas": [], "respaldo": {}, "ratio_max": None, "escala": "absoluta"}
+        self.__dict__.update({**base, **estado})
+
     @property
     def nombre(self):
         pesos = f"_vm{self.vida_media_dias}" if self.vida_media_dias else ""
@@ -126,7 +132,8 @@ class GBM:
         return self
 
     def predecir(self, X: pd.DataFrame) -> np.ndarray:
-        p = self.modelo.predict(self._entrada(X)[self.columnas])
+        Z = self._entrada(X)
+        p = self.modelo.predict(Z[self.columnas] if self.columnas else Z)
         if self.objetivo == "relativo":
             # Tope de seguridad: ninguna predicción supera 1,5 veces el ratio extremo visto al entrenar.
             p = np.clip(p, 0, self.ratio_max) * V.nivel(X, self.respaldo)
