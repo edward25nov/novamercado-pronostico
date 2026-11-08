@@ -218,13 +218,18 @@ indicada y se actualiza con números medidos en ese mismo PR.
   reproducir un caso nuevo como prueba. `en_promocion` de cada predicción es el dato que el
   reentrenamiento necesita para las fechas sin histórico (las observaciones no lo traen). El reloj
   del sistema solo aparece en columnas de auditoría (`recibido_en`, `cargado_en`), nunca en reglas.
+- **Pendiente para F6:** las ventas atípicas se guardan (no se inventa ni se descarta un dato real),
+  pero la observación queda con la regla `ventas_atipicas` en `correcciones`; el reentrenamiento
+  debe excluirlas o recortarlas para que un error de captura (p. ej. 99 999) no deforme el modelo.
 
 ### D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio
 - **Decisión:** las pruebas de carga e idempotencia corren contra Postgres 16.15 (en GitHub Actions
   como servicio del job; en local, un contenedor desechable en el puerto 55432). Cada prueba crea un
   esquema `prueba_<id>` y lo borra al terminar. Usan archivos pequeños de `tests/datos_prueba/` con
   el mismo formato que los publicados, porque los publicados no están en el repositorio. Sin
-  `NOVAMERCADO_TEST_DB_URL` se omiten (`pytest -rs` lo muestra).
+  `NOVAMERCADO_TEST_DB_URL` se omiten (`pytest -rs` lo muestra). Las 12 pruebas con los ejemplos
+  publicados (`tests/test_calidad_ejemplos.py`) también se omiten en la CI, porque necesitan
+  `datos/publicados/`; corren en local y en la verificación con un clon limpio.
 - **Alternativas:** SQLite en memoria; simular la base con objetos falsos.
 - **Justificación:** la idempotencia depende de `ON CONFLICT … WHERE IS DISTINCT FROM`, `COPY` y
   candados de Postgres, que SQLite no tiene o hace distinto; probarlos con otra base no prueba nada.
@@ -266,8 +271,9 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 | Tienda inexistente o ambigua (`tienda_desconocida`, `tienda_ambigua`) | rechazar | `99`, `5.5`, `true`, `"Guatemala"` (tres tiendas) |
 | Fecha con otro formato sin ambigüedad (`fecha_formato`) | reparar | E04 `"2025-11-17T00:00:00"`, `"17/11/2025"`; `"2025/11/17"`, `"20251117"`, `"17 de noviembre de 2025"`, `"Nov 17, 2025"`, `"11/17/2025"` (17 no puede ser mes) |
 | Fecha ambigua (`fecha_ambigua`) | advertir: día/mes (convención de Guatemala), o año de dos dígitos como 20AA | `"03/04/2026"` → 3 de abril; `"17/11/25"` |
-| Falta tienda o fecha, fecha imposible o fuera de rango (`falta_identidad`, `fecha_invalida`, `fecha_fuera_de_rango`) | rechazar (D12) | `"2025-02-30"`, `"mañana"`, `20251117` (número), tienda 10 antes del 2025-03-15 |
-| El mismo campo dos veces con valores distintos (`campo_en_conflicto`) | rechazar si es tienda o fecha; en un ítem, no se usa ninguno y se advierte | `"tienda_id": 5` y `"tienda": 4` |
+| Falta tienda o fecha, fecha imposible o fuera de rango (`falta_identidad`, `fecha_invalida`, `fecha_fuera_de_rango`) | rechazar (D12) | `"2025-02-30"`, `"mañana"`, `20251117` (número), tienda 10 antes del 2025-03-15, más de un año después del último dato |
+| Fecha posterior al calendario de feriados (`fecha_sin_calendario`) | advertir: se asume un día sin eventos (D12) | `"2027-01-05"` |
+| El mismo dato en campos sinónimos (`campo_repetido`, `campo_en_conflicto`) | se interpreta cada uno por separado y se comparan los valores **interpretados**: si coinciden, reparar; si difieren, rechazar si es tienda o fecha, o advertir y no usar ninguno si es de un ítem | `"tienda_id": 5` y `"tienda": "T05"` → reparar; `"tienda": "NovaMercado Cobán"` (8) → rechazar; `"familia_id": "lacteos"` y `"familia": "LÁCTEOS"` → reparar |
 | Cuerpo que no es JSON u objeto (`cuerpo_invalido`) | rechazar | vacío, texto plano, comillas simples, `[]`, `42` |
 
 **Ítems de la predicción**
@@ -279,7 +285,7 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 | Familia desconocida o elemento inválido (`familia_desconocida`, `item_invalido`) | advertir y excluirla (luego se completa como faltante) | `"ferreteria"`, `42` en la lista |
 | Número como texto o decimal entero (`numero_formato`) | reparar | E03 `"3"`, `2.0`, `"3,0"` |
 | Promoción no entera, negativa, faltante o no numérica (`promocion_imputada`) | advertir e imputar con la última promoción registrada, o 0 (D9) | `2.5`, `-1`, `null`, `"sí"`, ausente |
-| Promoción mayor al máximo histórico de la familia (`promocion_atipica`) | advertir y acotar al máximo (el modelo no distingue valores mayores) | `500` |
+| Promoción mayor al máximo histórico de la familia (`promocion_atipica`) | advertir y **conservar el valor**: el modelo lo trata como el máximo, pero el dato real queda registrado para el reentrenamiento | `500`, `"1,000"` |
 | Faltan familias (`faltan_familias`) | advertir y pronosticarlas (D9); si no viene la lista, se pronostican todas | E05 |
 | Familia repetida (`familia_repetida`) | reparar si el valor es el mismo; advertir y elegir según el costo (D10) si difiere | E06 |
 
@@ -301,10 +307,15 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 |---|---|---|
 | Nombre de campo distinto (`campo_renombrado`) | reparar si es un alias conocido o su forma normalizada coincide; advertir si solo es parecido | E07 `"tienda"`; `"tiendaId"`, `"Tienda_ID"`, `"store_id"`, `"promo"`, `"familia"` |
 | Campo desconocido (`campo_desconocido`) | advertir que se ignoró | `"origen": "pos"` |
-| Campo repetido con el mismo valor (`campo_repetido`) | reparar | `"tienda_id": 5, "tienda": 5` |
 | Formas alternativas (`forma`, `codificacion`) | reparar: lista con una sola solicitud, `{familia: valor}` en vez de lista, cuerpo en Latin-1 | — |
 
-- **Verificación:** 126 pruebas de calidad: los 10 ejemplos del catálogo y los 2 válidos publicados
+- **Cambios por la revisión del PR #5:** (1) los campos sinónimos se comparaban por su valor crudo,
+  así que `{"tienda_id": 5, "tienda": "5"}` se rechazaba y `{"familia_id": "lacteos", "familia":
+  "LÁCTEOS"}` descartaba el ítem; ahora se comparan los valores interpretados. (2) La promoción
+  atípica se acotaba al máximo histórico: no cambiaba la predicción (el GBM predice lo mismo para 19 y
+  para 500, 27,8537, porque no extrapola) pero sí el `en_promocion` registrado, que el
+  reentrenamiento usa para las fechas nuevas; ahora se conserva.
+- **Verificación:** 134 pruebas de calidad: los 10 ejemplos del catálogo y los 2 válidos publicados
   (cuando los archivos están), unos 100 casos fuera del catálogo y fuzzing con hypothesis (JSON y
   bytes arbitrarios y mutaciones de solicitudes válidas: 400 casos por prueba en la CI; una corrida
   de 5 000 por prueba, 25 000 en total, no encontró ninguna excepción fuera de `Rechazo`). La
@@ -351,13 +362,16 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 
 ### D12. Fechas: nunca el reloj del sistema; rango válido según los datos
 - **Decisión:** ninguna regla usa la fecha de hoy. Una solicitud de pronóstico es válida desde 28
-  días después del primer día del histórico (2024-03-29, la ventana de nivel) hasta el último día de
-  `feriados.csv` (2026-12-31), y nunca antes de la apertura de la tienda; una observación, desde el
-  primer día del histórico (y la apertura). Fuera de esos rangos se rechaza. Si faltan observaciones
+  días después del primer día del histórico (2024-03-29, la ventana de nivel) y nunca antes de la
+  apertura de la tienda; una observación, desde el primer día del histórico (y la apertura). El
+  límite superior es un año después del último dato conocido (o el fin de `feriados.csv` si es
+  posterior): más allá, la fecha se considera absurda y se rechaza. Entre el fin de `feriados.csv`
+  (2026-12-31) y ese límite se responde con advertencia: "se asumió un día sin feriados ni fechas
+  especiales". Si faltan observaciones
   recientes para la fecha pedida, se responde con advertencia indicando la última fecha con datos
   (lo agrega el servicio en F5, porque necesita la base).
-- **Alternativas:** aceptar cualquier fecha; advertir más allá de `feriados.csv` asumiendo que no hay
-  feriados.
+- **Alternativas:** aceptar cualquier fecha; rechazar todo lo posterior a `feriados.csv` (la versión
+  de F0; si la evaluación cruzara a 2027, todas las solicitudes responderían 422).
 - **Justificación:** el servicio opera sobre fechas simuladas (enunciado). Sin calendario, un
   pronóstico de Navidad o del 31 de diciembre se equivocaría por un factor de 3 a 5
   (`docs/perfil_datos.md`: índice 0.32 en Navidad, 1.69 el 31 de diciembre); el periodo de evaluación
