@@ -138,15 +138,22 @@ indicada y se actualiza con números medidos en ese mismo PR.
   hechos; que una fila falte en una nueva publicación es más probable que sea un archivo incompleto
   que una venta que no ocurrió, y borrarla cambiaría en silencio los datos de entrenamiento y las
   variables de predicción. Las filas actualizadas marcan `actualizado_en`.
-- **Primer modelo (F3):** tras la carga, si la tabla `estado_producto` no dice que ya se registró
-  el modelo inicial, espera a MLflow (hasta 3 minutos), y si no existe `@champion` entrena la
-  escalera con las ventas de la base, registra la versión y la promueve. Al terminar lo anota en
-  `estado_producto`, así los arranques siguientes no necesitan a MLflow para saberlo.
+- **Primer modelo (F3):** tras la carga, garantiza que exista `@champion`. **MLflow es la fuente de
+  verdad**; la marca en `estado_producto` solo evita depender de él cuando no responde:
+  - champion existe → nada que hacer;
+  - no hay champion pero sí una versión con `origen=inicializador` (el proceso murió entre registrar y
+    promover) → se promueve esa versión, sin reentrenar ni dejar versiones huérfanas;
+  - no hay ninguna versión (primer arranque, o se perdió el volumen de MLflow aunque la base siga) →
+    se entrena la escalera, se registra y se promueve;
+  - MLflow no responde → con marca, termina bien (hubo modelo y la API usa su caché, D17) tras 4
+    intentos; sin marca, espera hasta 3 minutos y si no, falla.
 - **Medido (F3):** desde cero, el inicializador termina 47 s después del `up` (carga 0,5 s;
   escalera y registro 38 s) con `novamercado-ventas` v1 en `@champion` (costo en validación 369 741,
   WAPE 0.1797, los mismos números que fuera de Docker). Segundo arranque: "modelo inicial ya
-  registrado (versión 1)" en 0,0 s; con MLflow detenido, igual, en 2 s. Sigue habiendo una sola
-  versión en el Registry.
+  registrado (versión 1)" en 0,0 s. Sigue habiendo una sola versión en el Registry. Casos de falla
+  (revisión del PR #4): sin alias y con la v1 registrada, la promueve en 2 s sin reentrenar; con el
+  volumen de MLflow borrado y la base intacta, reentrena y promueve en 40 s; con MLflow detenido,
+  termina bien en 11 s informando que el modelo ya se había registrado.
 - **No bloquea a la API:** la API no depende del inicializador (D18); si este fallara, la API
   arranca igual y responde 503 `sin_modelo` en `/health` (el motivo todavía no dice por qué no hay
   modelo; en F3/F5 el motivo indicará si falló la inicialización o si el primer modelo está en
@@ -351,6 +358,10 @@ actualiza en el mismo PR que cambie una regla.
   en el mismo escenario; con +40 %/−30 % en tres familias, ±3–4 % contra ±6–9 %). Se paga 0,7 % en
   estabilidad por robustez. Variantes descartadas: pesos por recencia (vida media 180 días, +0,6 %
   de costo), lr 0.03 con 1 000 árboles (−0,3 %, el doble de tiempo), hojas mínimas de 100 (+0,1 %).
+- **Huecos en las observaciones** (medido en la revisión del PR #4, entrenado hasta 2026-01-31 y
+  prediciendo febrero): si falta la venta de ayer, el sin escala pasa de WAPE 0.1740 a 0.1766 (sesgo
+  −0,5 % → −1,2 %); con tres días faltantes, 0.1872. El directo pasa de 0.1715 a 0.1815. El modelo
+  elegido tolera que una tienda no reporte algún día.
 - **Por qué la quincena aparte:** `feriados.csv` solo marca 6 fechas de pago (Bono 14 y aguinaldo),
   pero las ventas suben el 15 (índice 1.17) y a fin de mes (1.36 el día 31).
 
@@ -405,6 +416,9 @@ actualiza en el mismo PR que cambie una regla.
   `Pronosticador`: modelo, codificación de categorías, factores e información del entrenamiento) con
   tags de costo y WAPE de validación, fecha de corte, factores, run y tanda. El vigente es el alias
   `champion`; al reemplazarlo, el anterior queda como `anterior`.
+- **Formato del artefacto:** `Pronosticador.version_formato` (también en `info` y como tag de la
+  versión). Si se agregan atributos, `__setstate__` completa los faltantes con valores por defecto
+  para que un champion registrado antes siga cargando y prediciendo (hay prueba).
 - **Serialización:** `pickle` estándar con las mismas versiones en todas las imágenes (D3); no
   joblib, porque en el Lab 1 `dill` (que importa Airflow) alteraba su pickler.
 - **Alternativas:** `mlflow.sklearn` con el estimador solo (la API tendría que reconstruir aparte la
