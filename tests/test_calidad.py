@@ -73,7 +73,7 @@ def test_E05_familias_faltantes_se_completan_con_advertencia():
     cuerpo = prediccion()
     cuerpo["familias"] = [f for f in cuerpo["familias"] if f["familia_id"] not in ("bebe", "mascotas")]
     previas = {(5, "bebe"): 3}
-    _, obs, est, promos = _pred(cuerpo, promo_previa=lambda t, f: previas.get((t, f)))
+    _, obs, est, promos = _pred(cuerpo, promo_previa=lambda t, f, d: previas.get((t, f)))
     assert est == "advertencia" and set(promos) == set(FAMILIAS)
     assert promos["bebe"] == 3 and promos["mascotas"] == 0  # última promoción conocida, o 0 (D9)
     assert sum(o.regla == "faltan_familias" for o in obs) == 2
@@ -280,7 +280,7 @@ def test_familia_desconocida_se_excluye_y_se_completa_el_resto():
 def test_promocion_invalida_se_imputa_con_advertencia(valor):
     cuerpo = prediccion()
     cuerpo["familias"][1]["en_promocion"] = valor
-    _, obs, est, promos = _pred(cuerpo, promo_previa=lambda t, f: 6)
+    _, obs, est, promos = _pred(cuerpo, promo_previa=lambda t, f, d: 6)
     assert promos["bebidas"] == 6 and est == "advertencia"
 
 
