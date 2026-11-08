@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.env
+# Archivos publicados por el equipo docente: se colocan aquí, nunca van a Git
+/datos/publicados/*
+!/datos/publicados/.gitkeep
