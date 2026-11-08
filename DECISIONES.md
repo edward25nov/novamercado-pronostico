@@ -10,11 +10,13 @@ indicada y se actualiza con números medidos en ese mismo PR.
 ## Índice
 
 - **Producto e infraestructura**
-  - D1. Un solo `docker-compose.yml` con nombre de proyecto fijo — *propuesta (F1)*
+  - D1. Un solo `docker-compose.yml` con nombre de proyecto fijo — *vigente*
   - D2. Los archivos publicados van en `datos/publicados/`, fuera de Git y en solo lectura — *vigente*
   - D3. Versiones fijas y las mismas dependencias en la API, el inicializador y Airflow — *vigente*
-  - D4. Puerto de MLflow en el anfitrión configurable, 5000 por defecto — *propuesta (F1)*
+  - D4. Puerto de MLflow en el anfitrión configurable, 5000 por defecto — *vigente*
   - D5. Un inicializador idempotente prepara el producto desde cero — *propuesta (F2–F3)*
+  - D18. La API solo depende de la base de datos para arrancar — *vigente*
+  - D19. La API habla con Airflow por su API REST v2 con el usuario de `.env` — *vigente (F1), se usa en F6*
 - **Persistencia**
   - D6. Una sola tabla de ventas para el histórico y las observaciones — *propuesta (F2)*
 - **Calidad de los datos de entrada**
@@ -42,6 +44,21 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Justificación:** el enunciado pide levantar todo con un solo `docker compose up`. El nombre
   fijo evita que los volúmenes y redes choquen con otros proyectos en la misma máquina (en el Lab 1
   el volumen de Postgres de Airflow chocó con el de la clase 4 por compartir el nombre de proyecto).
+- **Servicios:** `db` y `airflow-db` (dos Postgres 16.15 separados, como pide el enunciado),
+  `mlflow` (backend SQLite y artefactos en el volumen `mlflow-datos`), `api`, y Airflow 3.3.2 con
+  LocalExecutor: `airflow-init` (migra la base y crea el usuario), `airflow-apiserver`,
+  `airflow-scheduler` y `airflow-dag-processor`. No hay `triggerer`: ninguna tarea es diferible, y
+  es un contenedor menos que levantar.
+- **Volúmenes con nombre** para todo lo que debe sobrevivir (`producto-db`, `mlflow-datos`,
+  `api-cache`, `airflow-db`, `airflow-logs`). Los logs de Airflow van en un volumen y no en una
+  carpeta del repositorio para no depender del UID del anfitrión en Linux. Los DAGs, `src/` y
+  `datos/publicados/` se montan en solo lectura.
+- **Credenciales** solo en `.env`; el compose usa `${VAR:?definir en .env}`, así que sin `.env`
+  falla de inmediato con un mensaje que dice qué falta, en vez de arrancar con claves vacías.
+- **Medido (F1, Mac M-series, imágenes ya construidas):** desde cero, todos los servicios quedan
+  sanos en unos 35 s; tras `down` + `up` en 23 s, conservando una tabla de prueba en `db` y un
+  experimento en MLflow. Una tarea disparada por la API REST de Airflow corre y ve el paquete,
+  los datos montados y las mismas versiones de scikit-learn (1.9.1) y MLflow (3.17.2).
 
 ### D2. Los archivos publicados van en `datos/publicados/`, fuera de Git y en solo lectura
 - **Decisión:** el contenido del archivo del GES (`tiendas.csv`, `familias.csv`,
@@ -60,6 +77,12 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Alternativas:** dependencias distintas por imagen; rangos de versiones.
 - **Justificación:** el modelo se serializa en un contenedor (inicializador o Airflow) y se carga en
   otro (API); con otra versión de scikit-learn puede no cargar o predecir distinto (sesión 5).
+- **Detalle:** `apache/airflow:3.3.2` ya trae pandas 3.0.5, numpy 2.5.3, scikit-learn 1.9.1,
+  fastapi 0.136.3, pydantic 2.13.5, uvicorn 0.52.4, httpx 0.28.1 y psycopg 3.3.5 (revisado con
+  `pip list` dentro de la imagen). `requirements.txt` usa exactamente esas versiones, de modo que
+  instalarlo en la imagen de Airflow solo agrega lo que falta (MLflow, skops) sin cambiar nada de
+  Airflow. Las imágenes base son `python:3.13.15-slim` (la misma versión menor de Python que Airflow),
+  `postgres:16.15`, `ghcr.io/mlflow/mlflow:v3.17.2` y `apache/airflow:3.3.2`.
 
 ### D4. Puerto de MLflow en el anfitrión configurable, 5000 por defecto
 - **Decisión:** `MLFLOW_PUERTO_HOST` en `.env` (5000 en `.env.example`). Dentro de la red de Docker
@@ -78,6 +101,28 @@ indicada y se actualiza con números medidos en ese mismo PR.
   entrene la API.
 - **Justificación:** no depende de que Airflow esté listo (es el servicio que más tarda en arrancar,
   y el producto debe estar en `ok` en menos de 10 minutos). La API se mantiene liviana y solo sirve.
+
+### D18. La API solo depende de la base de datos para arrancar
+- **Decisión:** en el compose, `api` espera solo a que `db` esté sana (`depends_on` con
+  `service_healthy`); no espera a MLflow ni a Airflow. El healthcheck del contenedor considera viva
+  a la API si responde HTTP, aunque `/health` devuelva 503 por no tener modelo.
+- **Alternativas:** esperar a que MLflow esté sano, como en la sesión 5.
+- **Justificación:** el evaluador interrumpe MLflow y reinicia el producto; si la API dependiera de
+  MLflow, un reinicio con MLflow caído la dejaría sin arrancar. La API debe seguir respondiendo
+  (con el modelo en caché, D17) y `/health` es el que informa la dependencia caída.
+
+### D19. La API habla con Airflow por su API REST v2 con el usuario de `.env`
+- **Decisión:** `airflow-init` crea el usuario administrador de `.env` (gestor de autenticación FAB,
+  el mismo de las sesiones 3 y 4). La API obtiene un token con `POST /auth/token` y dispara corridas
+  con `POST /api/v2/dags/{dag_id}/dagRuns` y `{"logical_date": null}`; el `dag_run_id` es el `id`
+  que devuelve `/admin/reentrenar`. Los DAGs quedan activos al crearse
+  (`DAGS_ARE_PAUSED_AT_CREATION=false`).
+- **Alternativas:** `airflow dags trigger` por línea de comandos dentro del contenedor (exige montar
+  el socket de Docker en la API); un DAG programado que revise una tabla de solicitudes (agrega la
+  latencia del intervalo).
+- **Justificación:** es la interfaz oficial y no requiere privilegios extra. Verificado en F1: una
+  corrida disparada así pasó de `queued` a `success` en segundos, y el DAG nuevo apareció en unos
+  20 s (`DAG_PROCESSOR__REFRESH_INTERVAL=30`).
 
 ## Persistencia
 
