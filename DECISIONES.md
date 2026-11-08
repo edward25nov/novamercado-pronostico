@@ -222,6 +222,9 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Pendiente para F6:** las ventas atípicas se guardan (no se inventa ni se descarta un dato real),
   pero la observación queda con la regla `ventas_atipicas` en `correcciones`; el reentrenamiento
   debe excluirlas o recortarlas para que un error de captura (p. ej. 99 999) no deforme el modelo.
+  Además, las observaciones de días sin solicitud de pronóstico quedan con `en_promocion` NULL en
+  `lectura.SQL_VENTAS`: el reentrenamiento debe imputarlas con la última promoción conocida (D9) o
+  excluirlas.
 
 ### D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio
 - **Decisión:** las pruebas de carga e idempotencia corren contra Postgres 16.15 (en GitHub Actions
@@ -486,7 +489,9 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   `champion`; al reemplazarlo, el anterior queda como `anterior`.
 - **Formato del artefacto:** `Pronosticador.version_formato` (también en `info` y como tag de la
   versión). Si se agregan atributos, `__setstate__` completa los faltantes con valores por defecto
-  para que un champion registrado antes siga cargando y prediciendo (hay prueba).
+  para que un champion registrado antes siga cargando y prediciendo. Lo mismo en `GBM` (formato 2,
+  F5: `columnas` vacío = todas, como entrenaba F3). Verificado con un artefacto entrenado con el
+  código de F3 en un worktree: carga y predice con el código nuevo (y hay prueba).
 - **Serialización:** `pickle` estándar con las mismas versiones en todas las imágenes (D3); no
   joblib, porque en el Lab 1 `dill` (que importa Airflow) alteraba su pickler.
 - **Alternativas:** `mlflow.sklearn` con el estimador solo (la API tendría que reconstruir aparte la
@@ -515,7 +520,9 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   base, MLflow y Airflow (timeout de 3 s cada una) y refresca el catálogo; y cada 30 s (5 s mientras
   no hay modelo) consulta la versión de `@champion`. Si cambió, descarga esa versión, la guarda en el
   volumen `api-cache` y la reemplaza con una sola asignación (atómica: cada solicitud toma una foto del
-  modelo al empezar, así nunca mezcla dos versiones). Si MLflow no responde, se conserva el modelo
+  modelo al empezar, así nunca mezcla dos versiones). La caché se indexa por versión y `run_id`
+  (`modelos/<versión>-<run_id>/`): si se perdiera el volumen de MLflow y el Registry volviera a
+  numerar desde 1, una "v1" nueva no se confunde con la v1 vieja de la caché. Si MLflow no responde, se conserva el modelo
   cargado. Al arrancar, primero se carga la copia de la caché (sin red) y luego se consulta MLflow.
   `/health` solo lee este estado: responde al instante. Cada paso del monitor es independiente: una
   falla al cargar el catálogo no impide cargar el modelo (ver "Medido").
