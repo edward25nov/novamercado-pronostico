@@ -51,8 +51,17 @@ indicada y se actualiza con números medidos en ese mismo PR.
   es un contenedor menos que levantar.
 - **Volúmenes con nombre** para todo lo que debe sobrevivir (`producto-db`, `mlflow-datos`,
   `api-cache`, `airflow-db`, `airflow-logs`). Los logs de Airflow van en un volumen y no en una
-  carpeta del repositorio para no depender del UID del anfitrión en Linux. Los DAGs, `src/` y
-  `datos/publicados/` se montan en solo lectura.
+  carpeta del repositorio para no depender del UID del anfitrión en Linux; por eso Airflow corre
+  con el UID fijo de la imagen oficial (`50000:0`) y no es configurable: cambiarlo dejaría el volumen
+  de logs sin permisos de escritura. Los DAGs, `src/` y `datos/publicados/` se montan en solo
+  lectura (solo necesitan permiso de lectura, que es el normal de un clon).
+- **URL de la base:** `config.py` la arma desde `PRODUCTO_DB_*` codificando usuario y clave, así una
+  clave con `@`, `:` o `/` no rompe la conexión (hay prueba).
+- **MLflow sobre SQLite (riesgo conocido):** SQLite admite un solo escritor; si el inicializador y
+  un DAG registraran a la vez podría aparecer "database is locked". Se mitiga porque el inicializador
+  solo entrena cuando no existe `@champion` y el DAG tiene `max_active_runs=1`. Alternativa
+  registrada: una base `mlflow` en el Postgres del producto (exige agregar `psycopg2` a la imagen de
+  MLflow). Se vuelve a medir en F6 con escrituras concurrentes.
 - **Credenciales** solo en `.env`; el compose usa `${VAR:?definir en .env}`, así que sin `.env`
   falla de inmediato con un mensaje que dice qué falta, en vez de arrancar con claves vacías.
 - **Medido (F1, Mac M-series, imágenes ya construidas):** desde cero, todos los servicios quedan
@@ -110,6 +119,14 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Justificación:** el evaluador interrumpe MLflow y reinicia el producto; si la API dependiera de
   MLflow, un reinicio con MLflow caído la dejaría sin arrancar. La API debe seguir respondiendo
   (con el modelo en caché, D17) y `/health` es el que informa la dependencia caída.
+- **Vida contra salud:** el HEALTHCHECK del contenedor consulta `/vivo`, que no toca dependencias;
+  `/health` revisa db, MLflow y Airflow **en paralelo** con timeout de 3 s cada una.
+- **Medido (revisión del PR #2):** con las tres dependencias en `docker compose pause`, `/health`
+  tardaba 9,05 s con las revisiones en serie y el contenedor quedaba `unhealthy` (el healthcheck
+  usaba `/health` con timeout de 4 s). Tras el cambio tarda 3,1 s (tres mediciones: 3,09–3,11 s) y el
+  contenedor siguió `healthy` durante 40 s con las dependencias pausadas. Hay una prueba con
+  dependencias lentas que exige que las revisiones corran en paralelo. En F5 las revisiones pasan a
+  un monitor en segundo plano (D17) y `/health` responderá al instante.
 
 ### D19. La API habla con Airflow por su API REST v2 con el usuario de `.env`
 - **Decisión:** `airflow-init` crea el usuario administrador de `.env` (gestor de autenticación FAB,
