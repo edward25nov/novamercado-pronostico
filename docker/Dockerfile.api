@@ -1,0 +1,21 @@
+# Imagen del producto: la usan la API y (desde F2) el inicializador.
+FROM python:3.13.15-slim
+
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
+
+# Dependencias primero: la capa pesada queda en caché mientras no cambie requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ src/
+
+RUN useradd --create-home app && mkdir -p /cache && chown app /cache
+USER app
+EXPOSE 8000
+
+# Vivo = el proceso responde HTTP (aunque /health devuelva 503 mientras no hay modelo).
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 CMD python -c "import urllib.request as u, urllib.error as e;\
+exec('try: u.urlopen(\"http://localhost:8000/health\", timeout=4)\nexcept e.HTTPError: pass')"
+
+CMD ["uvicorn", "novamercado.servicio.app:app", "--host", "0.0.0.0", "--port", "8000"]

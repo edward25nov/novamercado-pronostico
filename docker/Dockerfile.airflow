@@ -1,0 +1,6 @@
+FROM apache/airflow:3.3.2
+
+# Mismas dependencias que la API (requirements.txt). Fijar apache-airflow evita que pip lo
+# actualice o lo rompa al resolver; las versiones compartidas ya coinciden con las de la imagen.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir "apache-airflow==3.3.2" -r /tmp/requirements.txt
