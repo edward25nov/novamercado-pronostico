@@ -124,8 +124,21 @@ indicada y se actualiza con números medidos en ese mismo PR.
   a la del CSV) y termina 13 s después del `up`. En el segundo arranque responde "sin cambios" para los
   cinco archivos en 0,0 s. Con dos inicializadores lanzados a la vez sobre una base vacía, uno cargó
   las 83 052 filas y el otro esperó el candado y encontró "sin cambios"; quedaron 83 052 filas.
+- **Contenido inválido:** si un archivo trae valores que la base rechaza (p. ej. una venta
+  negativa), el inicializador registra una sola línea, `historico_ventas.csv: contenido inválido
+  (<motivo de Postgres>)`, y termina con código 1. La transacción de ese archivo se revierte; los
+  archivos anteriores quedan cargados y, como la huella del fallido no se registró, se reintenta en el
+  próximo arranque. Verificado con una venta `-5` en la primera fila del histórico publicado:
+  quedaron los cuatro catálogos y 0 ventas.
+- **Filas que desaparecen de un archivo republicado no se borran:** el upsert solo inserta o
+  actualiza. *Alternativa:* borrar lo que ya no está en el archivo. *Justificación:* las ventas son
+  hechos; que una fila falte en una nueva publicación es más probable que sea un archivo incompleto
+  que una venta que no ocurrió, y borrarla cambiaría en silencio los datos de entrenamiento y las
+  variables de predicción. Las filas actualizadas marcan `actualizado_en`.
 - **No bloquea a la API:** la API no depende del inicializador (D18); si este fallara, la API
-  arranca igual y `/health` lo refleja.
+  arranca igual y responde 503 `sin_modelo` en `/health` (el motivo todavía no dice por qué no hay
+  modelo; en F3/F5 el motivo indicará si falló la inicialización o si el primer modelo está en
+  entrenamiento).
 
 ### D18. La API solo depende de la base de datos para arrancar
 - **Decisión:** en el compose, `api` espera solo a que `db` esté sana (`depends_on` con
