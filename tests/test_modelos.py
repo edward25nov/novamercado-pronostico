@@ -61,3 +61,10 @@ def test_artefacto_de_formato_anterior_sigue_cargando():
     objetivo = pd.DataFrame({"tienda_id": [1], "familia_id": ["abarrotes"],
                              "fecha": [v["fecha"].max() + pd.Timedelta(days=1)], "en_promocion": [1]})
     assert cargado.predecir(v, objetivo, cat.tiendas, cat.feriados)["cantidad_sugerida"].iloc[0] >= 0
+
+
+def test_gbm_entrena_con_columnas_constantes_o_vacias():
+    v, cat, X = _xy()
+    X = X.assign(evento=np.nan, ev_comercial=0.0)  # ningún evento en el periodo de entrenamiento
+    p = M.GBM(max_iter=20).ajustar(X, v["ventas"], v["fecha"]).predecir(X)
+    assert np.isfinite(p).all()
