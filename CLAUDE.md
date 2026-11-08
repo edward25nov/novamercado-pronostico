@@ -40,13 +40,28 @@ enunciado, resumido abajo.
 - Versiones fijas en `requirements.txt` e imágenes; las mismas dependencias en API, inicializador
   y Airflow.
 
+## Reglas del modelo
+- El modelo de producción es `entrenamiento.PRODUCCION` (D13); la escalera completa se evalúa en cada
+  tanda con las mismas ventanas (D22). Ventas, factores y codificación viajan juntos en el
+  `Pronosticador` (D24).
+- Nombre registrado y experimento: `novamercado-ventas`; alias `champion` (vigente) y `anterior`.
+- Serializar con `pickle` estándar, nunca joblib (D24).
+
 ## Comandos
 - `python3.13 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
 - `.venv/bin/pytest -q` · `.venv/bin/ruff check .`
 - `.venv/bin/python scripts/perfilar_datos.py` → regenera `docs/perfil_datos.md`.
+- `PYTHONPATH=src .venv/bin/python scripts/comparar_modelos.py` → regenera `docs/comparacion_modelos.md`
+  (escalera, robustez ante cambios de demanda y cantidad sugerida; ~3 min, sin MLflow).
+- Pruebas de base: Postgres desechable en 55432 y `NOVAMERCADO_TEST_DB_URL` (ver README).
 
 ## Estructura
-- `src/novamercado/`: paquete del producto (calidad, datos, modelo, servicio).
+- `src/novamercado/`: paquete del producto.
+  - `datos/`: `esquema.sql`, `carga.py` (archivos publicados, idempotente), `lectura.py` (ventas y catálogos).
+  - `modelo/`: `calendario.py`, `variables.py` (misma función para entrenar y predecir), `modelos.py`
+    (baseline y GBM), `costos.py` (métrica de negocio y factores), `evaluacion.py` (ventanas),
+    `pronosticador.py` (artefacto registrado), `entrenamiento.py` (escalera, MLflow, alias).
+  - `servicio/`: API FastAPI. `inicializador.py`: esquema, carga y primer modelo.
 - `dags/`: DAGs de Airflow 3; solo orquestan funciones de `src/novamercado/`.
 - `docker/`: Dockerfiles. `docker-compose.yml` en la raíz (proyecto `novamercado`).
 - `tests/`: pruebas con pytest (corren en cada PR con GitHub Actions).
