@@ -13,7 +13,8 @@ from tests.catalogo_prueba import FAMILIAS, catalogo, observacion, prediccion
 
 CAT = catalogo()
 # FUZZ_EJEMPLOS=5000 para una corrida larga (en la CI, 400 por prueba)
-AJUSTES = settings(max_examples=int(os.environ.get("FUZZ_EJEMPLOS", "400")), deadline=None, suppress_health_check=[HealthCheck.too_slow])
+AJUSTES = settings(max_examples=int(os.environ.get("FUZZ_EJEMPLOS", "400")), deadline=None,
+                   suppress_health_check=[HealthCheck.too_slow])
 
 escalar = st.one_of(st.none(), st.booleans(), st.integers(-10**6, 10**6), st.floats(allow_nan=True),
                     st.text(max_size=20), st.sampled_from(["T05", "5", "17/11/2025", "LÁCTEOS", "1,234", "-4",
