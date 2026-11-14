@@ -64,6 +64,9 @@ class Resultado:
     candidatos: dict[str, Candidato]
     validacion: pd.DataFrame          # predicciones fuera de muestra del modelo de producción
     linaje: dict = field(default_factory=dict)
+    # Predicciones del modelo de producción entrenado solo con filas anteriores a `comparar_desde`
+    # (para el criterio de reemplazo, D15): días posteriores al corte del vigente.
+    comparacion: pd.DataFrame | None = None
 
     @property
     def produccion(self) -> Candidato:
@@ -88,8 +91,12 @@ def _evaluar(nombre, fabrica, X, y, ventas, vs, costos) -> tuple[Candidato, pd.S
     return cand, pred
 
 
-def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS) -> Resultado:
-    """Evalúa la escalera con validación temporal y entrena el modelo de producción con todo."""
+def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS,
+             comparar_desde: pd.Timestamp | None = None) -> Resultado:
+    """Evalúa la escalera con validación temporal y entrena el modelo de producción con todo.
+
+    Con `comparar_desde`, además entrena el modelo de producción solo con filas anteriores a esa
+    fecha y predice las filas desde esa fecha (fuera de muestra), para compararlo con el vigente."""
     ventas, preparado = preparacion.preparar(ventas)
     codigos = V.codigos_desde(cat.tiendas, cat.familias, cat.feriados)
     X = V.construir(ventas, ventas, cat.tiendas, cat.feriados, codigos)
@@ -129,7 +136,14 @@ def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS)
             ventas[["tienda_id", "familia_id", "fecha", "ventas"]], index=False).sum()),
         **preparado,
     }
-    return Resultado(Pronosticador(modelo, codigos, prod.factores, info), candidatos, validacion, linaje)
+    comparacion = None
+    if comparar_desde is not None and (ventas["fecha"] >= comparar_desde).any():
+        antes = (ventas["fecha"] < comparar_desde).to_numpy()
+        m = ESCALERA[PRODUCCION]().ajustar(X[antes], y[antes], ventas["fecha"][antes])
+        comparacion = ventas.loc[~antes, ["tienda_id", "familia_id", "fecha", "ventas", "en_promocion"]].assign(
+            venta_esperada=m.predecir(X[~antes]))
+    return Resultado(Pronosticador(modelo, codigos, prod.factores, info), candidatos, validacion, linaje,
+                     comparacion)
 
 
 def _registrar_candidato(cand: Candidato):

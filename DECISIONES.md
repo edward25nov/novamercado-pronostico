@@ -500,37 +500,43 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 
 ### D15. Criterio de reemplazo del modelo vigente
 - **Decisión** (`src/novamercado/reentrenamiento.py`, DAG `reentrenamiento`): el retador y el vigente
-  se miden con el costo de `costos.csv` en la **misma ventana**, los últimos 28 días con ventas, y con
-  los factores de cantidad elegidos **de la misma forma**, con datos anteriores a esa ventana:
-  - retador: el modelo de esa ventana se entrenó solo con las filas anteriores a ella (validación
-    temporal de D22) y sus factores salen de las tres ventanas anteriores;
+  se comparan con el costo de `costos.csv` **solo en los días posteriores al corte del vigente**
+  (máximo 28), donde los dos están fuera de muestra, y con los factores de cantidad elegidos de la
+  misma forma (con datos anteriores a esos días):
+  - retador: un modelo de la misma receta entrenado solo con las filas anteriores a esos días
+    (`entrenar(..., comparar_desde=...)`), con factores de su validación anterior a esos días;
   - vigente: su artefacto predice las mismas filas un día a la vez con las ventas reales hasta el día
-    anterior, con los factores que eligió al entrenarse.
-  Se promueve si el costo del retador es **al menos 1 % menor** y pasa las verificaciones de sanidad
-  (filas en la ventana, costo finito). Si el vigente no puede predecir (p. ej. un artefacto ilegible),
-  se promueve el retador. El modelo promovido es el retador reentrenado con todas las filas.
-- **El alias solo se mueve al final** (`decidir`); el retador se registra antes como versión candidata
-  sin alias, con tags `decision` (pendiente → promovido o rechazado), `motivo` y `dag_run_id`. Un fallo
-  en cualquier tarea deja la ejecución `fallido` con el motivo real y el vigente no cambia.
-- **Sesgo conocido (conservador):** si el vigente se entrenó con datos que incluyen parte de la
-  ventana (reentrenamientos con menos de 28 días de diferencia), su costo en la ventana es en parte
-  dentro de muestra y le favorece; el retador solo gana si es claramente mejor. Se prefiere así:
-  cambiar de modelo tiene costo (otra versión en operación) y un falso positivo empeora las
-  sugerencias.
-- **Alternativas:** comparar con las predicciones registradas del vigente (propuesta de F0: dependen de
-  qué solicitudes llegaron y con qué promociones, y no existen para días sin solicitud); comparar en
-  ventanas distintas o con factores elegidos dentro de la ventana medida (injusto para uno de los dos);
-  promover siempre el más nuevo (sin criterio).
-- **Medido (F6, Docker):**
-  - Con los mismos datos que el vigente: "Costo en validación 88 786 vs 82 849 del vigente (v1;
-    −7.2 %)": no se promovió (el vigente ya había visto la ventana).
-  - Tras enviar por la API 36 días de operación (2026-03-01 a 04-05) con +35 % de demanda: "Costo en
-    validación 136 283 vs 143 094 del vigente (v1; +4.8 %)": se promovió la v3 y la API la usó 8 s
-    después.
-  - Cada reentrenamiento tardó 46–48 s de punta a punta (límite: 10 minutos; el DAG tiene
-    `dagrun_timeout` de 10 minutos y cada tarea `execution_timeout` de 9).
-  - Con MLflow detenido a mitad de la ejecución: `fallido` con el motivo ("entrenar_retador:
-    MlflowException …"), el champion siguió en la v3 y las predicciones respondieron 200.
+    anterior, con sus factores (elegidos al entrenarse, antes de su corte).
+  Reglas: (1) con menos de **7 días** nuevos no se compara y se conserva el vigente; (2) si no, se
+  promueve **salvo que el retador cueste más de 2 % más** que el vigente (no inferioridad); (3) si el
+  vigente no puede predecir, se promueve el retador; (4) sin vigente, se promueve el retador. El
+  modelo promovido es el retador entrenado con **todas** las filas (incluidos los días comparados).
+- **Por qué no inferioridad:** con la misma receta, el retador solo agrega datos más recientes; en los
+  días comparados ambos modelos vieron casi lo mismo y tienden a empatar. La comparación protege
+  contra regresiones (datos corruptos, un error) y la no inferioridad deja entrar los datos nuevos,
+  que es lo que se necesita cuando cambia la demanda. Exigir "mejor por 1 %" bloqueaba casi todos los
+  reentrenamientos.
+- **El alias solo se mueve al final**: el retador se registra antes como versión candidata sin alias;
+  en `decidir` primero se escriben los tags `decision` y `motivo`, luego se mueve el alias y al final se
+  registra el resultado. Si algo falla, la ejecución queda `fallido` y el motivo dice si el alias
+  cambió (si ya apuntaba al retador, `promovido: true`).
+- **Alternativas:** (a) los últimos 28 días aunque se superpongan con el entrenamiento del vigente
+  (primera versión de F6, ver abajo); (b) comparar con las cantidades que sirvió el vigente (tabla
+  `predicciones`): solo existen para días con solicitud y con la promoción que llegó; (c) promover
+  siempre el más nuevo (sin protección contra regresiones).
+- **Error de la primera versión (revisión del PR #7):** la ventana eran los últimos 28 días; el vigente
+  se evaluaba dentro de muestra en los días que ya había visto y el retador fuera. Con 7 días operados
+  a +35 % no promovía (103 458 vs 98 998, −4,5 %, medido por el revisor) aunque el vigente sirvió esos
+  días con sesgo −17,3 %; en la simulación de F7 pasó lo mismo a los 28 días (96 233 vs 95 611).
+- **Medido (F6, Docker, desde cero):**
+  - Sin días nuevos: "solo hay 0 días de ventas posteriores al corte del vigente (v1); se necesitan 7…":
+    no se promueve (44 s).
+  - 7 días (2026-03-01 a 07) operados por la API con +35 % de demanda: "Costo en validación 49 355 vs
+    49 541 del vigente (v1; −0.4 %; 7 días posteriores a su corte)": se promueve la v3, que ya incluye
+    esos 7 días (45 s). Antes del arreglo, el mismo escenario no promovía.
+  - Con MLflow detenido a mitad: `fallido` con el motivo real; el champion no cambió y las predicciones
+    respondieron 200.
+  - Cada reentrenamiento: 44–48 s (límite 10 min; `dagrun_timeout` 10 min, `execution_timeout` 9).
 
 ### D26. Preparación de las ventas para reentrenar
 - **Decisión** (`modelo/preparacion.py`, dentro de `entrenar`): (1) una observación mayor a 3 veces el
