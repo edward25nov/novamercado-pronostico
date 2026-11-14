@@ -56,8 +56,8 @@ def asegurar_modelo_inicial(cfg: config.Config) -> str:
     MLflow es la fuente de verdad; la marca en `estado_producto` solo sirve para no depender de él
     cuando no responde (si ya hubo un modelo, la API usa su caché). Casos:
     - champion existe: nada que hacer.
-    - no hay champion pero sí una versión del inicializador (murió entre registrar y promover):
-      se promueve esa versión, sin reentrenar.
+    - no hay champion pero sí una versión que fue champion (alias perdido) o una del inicializador
+      (murió entre registrar y promover): se promueve esa versión, sin reentrenar.
     - no hay ninguna (primer arranque, o se perdió el volumen de MLflow): se entrena y promueve.
     """
     with psycopg.connect(cfg.db_url, autocommit=True) as con:
@@ -71,10 +71,14 @@ def asegurar_modelo_inicial(cfg: config.Config) -> str:
         vigente = entrenamiento.version_vigente(cfg.mlflow_uri)
         if vigente is not None:
             hecho = f"@{entrenamiento.ALIAS} vigente (versión {vigente})"
-        elif (huerfana := entrenamiento.ultima_version(cfg.mlflow_uri, origen="inicializador")) is not None:
-            entrenamiento.promover(cfg.mlflow_uri, huerfana)
-            vigente = huerfana
-            hecho = f"versión {huerfana} registrada sin promover: promovida sin reentrenar"
+        elif (previa := entrenamiento.ultima_version(cfg.mlflow_uri, tag=(entrenamiento.TAG_FUE_CHAMPION, "true"))
+              or entrenamiento.ultima_version(cfg.mlflow_uri, origen="inicializador")) is not None:
+            # Se perdió el alias (o el proceso murió entre registrar y promover): se vuelve a la última
+            # versión que fue champion, venga del inicializador o de un reentrenamiento. Nunca a un
+            # candidato que el criterio rechazó.
+            entrenamiento.promover(cfg.mlflow_uri, previa)
+            vigente = previa
+            hecho = f"no había @champion: se restituyó la versión {previa} sin reentrenar"
         else:
             t0 = time.perf_counter()
             res = entrenamiento.entrenar(lectura.ventas(con), lectura.catalogos(con))
