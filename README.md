@@ -4,7 +4,7 @@ Servicio de pronóstico diario de ventas por familia de producto para las tienda
 (Laboratorio 2, Product Development). Integra FastAPI, PostgreSQL, MLflow y Apache Airflow, y se
 levanta con un solo comando.
 
-> Estado: en construcción por fases (F6: reentrenamiento con Airflow; faltan el simulador y la evidencia).
+> Estado: F7 (simulación de la operación); falta la evidencia final y el tag de entrega.
 
 ## Requisitos
 - Docker Desktop (o Docker Engine) con Compose v2, con al menos 4 GB de memoria para Docker.
@@ -48,6 +48,19 @@ curl -s -X POST localhost:8000/v1/observaciones -H 'content-type: application/js
 # Reentrenamiento (DAG "reentrenamiento" en Airflow): devuelve 202 con el id de la ejecución
 curl -s -X POST localhost:8000/admin/reentrenar
 curl -s localhost:8000/admin/reentrenar/<id>   # en_curso | exitoso | fallido, con promovido, version y motivo
+```
+
+El reentrenamiento compara al retador con el vigente solo en los días posteriores al corte del vigente:
+tras una promoción hacen falta **al menos 7 días nuevos de observaciones** antes de que otro
+reentrenamiento pueda promover (DECISIONES.md, D15).
+
+## Simulación de la operación
+Con el producto levantado desde cero, `scripts/simular_operacion.py` reproduce la evaluación (56 días
+posteriores al histórico, solicitudes con problemas, reentrenamientos, cambio de demanda, caída de
+MLflow y reinicio del producto) y escribe `evidencia/simulacion.md`:
+
+```
+.venv/bin/python scripts/simular_operacion.py --desde 2026-03-01 --dias 56   # ~6 minutos
 ```
 
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos
