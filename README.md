@@ -4,7 +4,7 @@ Servicio de pronóstico diario de ventas por familia de producto para las tienda
 (Laboratorio 2, Product Development). Integra FastAPI, PostgreSQL, MLflow y Apache Airflow, y se
 levanta con un solo comando.
 
-> Estado: en construcción por fases (F5: servicio completo; falta el reentrenamiento con Airflow, F6).
+> Estado: en construcción por fases (F6: reentrenamiento con Airflow; faltan el simulador y la evidencia).
 
 ## Requisitos
 - Docker Desktop (o Docker Engine) con Compose v2, con al menos 4 GB de memoria para Docker.
@@ -44,6 +44,10 @@ curl -s -X POST localhost:8000/v1/prediccion -H 'content-type: application/json'
 curl -s -X POST localhost:8000/v1/observaciones -H 'content-type: application/json' \
      -d @datos/publicados/ejemplos/observacion_valida.json
 .venv/bin/python scripts/enviar_ejemplos.py   # todos los ejemplos -> evidencia/respuestas_api.md
+
+# Reentrenamiento (DAG "reentrenamiento" en Airflow): devuelve 202 con el id de la ejecución
+curl -s -X POST localhost:8000/admin/reentrenar
+curl -s localhost:8000/admin/reentrenar/<id>   # en_curso | exitoso | fallido, con promovido, version y motivo
 ```
 
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos

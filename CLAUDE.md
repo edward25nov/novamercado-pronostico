@@ -71,8 +71,12 @@ enunciado, resumido abajo.
   - `servicio/`: API FastAPI. `app.py` (endpoints: solo orquestan), `estado.py` (modelo vigente con
     caché y recarga, catálogo, monitor de salud en un hilo), `repositorio.py` (SQL de la operación),
     `dependencias.py` (revisiones de db, MLflow y Airflow).
-  - `inicializador.py`: esquema, carga y primer modelo.
-- `dags/`: DAGs de Airflow 3; solo orquestan funciones de `src/novamercado/`.
+  - `inicializador.py`: esquema, carga y primer modelo (o restitución del último champion).
+  - `reentrenamiento.py`: tareas del DAG (`entrenar_retador`, `decidir`, `registrar_fallo`) y el
+    criterio de reemplazo `decidir_reemplazo` (función pura, D15). `modelo/preparacion.py`: atípicas y
+    promociones faltantes antes de entrenar (D26).
+- `dags/`: DAGs de Airflow 3; solo orquestan funciones de `src/novamercado/`. `reentrenamiento.py`:
+  sin programación, se dispara con `POST /admin/reentrenar`; `max_active_runs=1`, 10 minutos máximo.
 - `docker/`: Dockerfiles. `docker-compose.yml` en la raíz (proyecto `novamercado`).
 - `tests/`: pruebas con pytest (corren en cada PR con GitHub Actions).
 - `scripts/`: utilidades (perfil de datos, simulador de operación).
