@@ -109,8 +109,11 @@ def valida_contrato(d: dict) -> list[str]:
 
 # --- eventos de operación
 
+PROYECTO: list[str] = []  # ["-p", nombre] y/o ["-f", archivo] para actuar sobre otro stack
+
+
 def compose(*args) -> None:
-    subprocess.run(["docker", "compose", *args], cwd=RAIZ, check=True, capture_output=True)
+    subprocess.run(["docker", "compose", *PROYECTO, *args], cwd=RAIZ, check=True, capture_output=True)
 
 
 def esperar(cliente: httpx.Client, condicion, limite_s: float, pausa: float = 1.0) -> float | None:
@@ -156,7 +159,10 @@ def main() -> None:
     ap.add_argument("--reinicio-dia", type=int, default=35)
     ap.add_argument("--sin-eventos", action="store_true", help="no detener MLflow ni reiniciar el producto")
     ap.add_argument("--semilla", type=int, default=7)
+    ap.add_argument("--proyecto", help="proyecto de Compose sobre el que actúan los eventos (por defecto, el del .yml)")
+    ap.add_argument("--compose-file", help="archivo de Compose (por defecto, docker-compose.yml de la raíz)")
     a = ap.parse_args()
+    PROYECTO.extend((["-p", a.proyecto] if a.proyecto else []) + (["-f", a.compose_file] if a.compose_file else []))
 
     rng, nrng = random.Random(a.semilla), np.random.default_rng(a.semilla)
     h = pd.read_csv(Path(a.datos) / "historico_ventas.csv", parse_dates=["fecha"])

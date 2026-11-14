@@ -638,7 +638,13 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
     ingenua (**-48.6%**); entre −41 % y −62 % cada semana, también
     después del cambio de demanda.
   - 4 reentrenamientos (45–55 s), los 4 promovidos por no inferioridad (diferencias de −0,3 % a +0,1 %
-    en los 13–14 días posteriores al corte de cada vigente).
+    en los 13–14 días posteriores al corte de cada vigente). Son empates esperables: con la misma
+    receta, el retador de comparación y el vigente vieron casi los mismos datos; la promoción deja
+    entrar los días nuevos al modelo servido. Un retador más de 2 % peor se rechaza (D15).
+  - Reproducibilidad: el revisor repitió la simulación desde cero en otro proyecto de Compose y obtuvo
+    los mismos códigos de respuesta (507/40/537), 0 5xx, 0 errores de contrato, los mismos 4
+    reentrenamientos con los mismos costos y un costo total de 207 407 (+0,4 %); la variación entre
+    corridas es de ±0,5 % (orden de llegada de las solicitudes y promociones imputadas).
   - MLflow detenido → `degradado` a los 4 s; de vuelta → `ok` a los 5 s. `down` + `up` → `ok` a los 25 s.
   - La única advertencia sobre una solicitud válida fue correcta: la tienda 10 abrió el 2025-03-15, así
     que la simulación no tiene sus ventas antes del 2026-03-14 y la API avisó que pronosticaba con la

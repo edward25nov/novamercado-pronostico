@@ -63,6 +63,9 @@ MLflow y reinicio del producto) y escribe `evidencia/simulacion.md`:
 .venv/bin/python scripts/simular_operacion.py --desde 2026-03-01 --dias 56   # ~6 minutos
 ```
 
+Los eventos (detener MLflow, `down` + `up`) actúan sobre el proyecto de Compose `novamercado`. Para
+simular contra otro stack, pasar `--url` y también `--proyecto` (y `--compose-file` si corresponde).
+
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos
 los datos del producto, MLflow y Airflow: `docker compose down -v`.
 
