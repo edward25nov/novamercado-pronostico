@@ -121,3 +121,19 @@ def guardar_observacion(con: psycopg.Connection, solicitud_id: int, obs: Observa
                 "solicitud_id) VALUES (%s, %s, %s, %s, %s, %s)", (*clave, anterior, v.ventas, solicitud_id))
             guardados += 1
     return guardados
+
+
+# --- reentrenamientos (D15, D16)
+
+CANDADO_REENTRENAR = 2026_11_16
+
+
+def reentrenamiento(con: psycopg.Connection, run_id: str) -> dict | None:
+    fila = con.execute("SELECT estado, promovido, version, motivo FROM reentrenamientos WHERE id = %s",
+                       (run_id,)).fetchone()
+    return dict(zip(("estado", "promovido", "version", "motivo"), fila, strict=True)) if fila else None
+
+
+def nuevo_reentrenamiento(con: psycopg.Connection, run_id: str) -> None:
+    con.execute("INSERT INTO reentrenamientos (id, estado) VALUES (%s, 'en_curso') ON CONFLICT (id) DO NOTHING",
+                (run_id,))

@@ -9,6 +9,7 @@ Los endpoints solo orquestan: la limpieza vive en `novamercado.calidad`, el regi
 
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -27,6 +28,7 @@ from novamercado.calidad.esquemas import (
 )
 from novamercado.calidad.resultado import ADVERTIR, Observacion
 from novamercado.servicio import repositorio
+from novamercado.servicio.airflow import ErrorAirflow
 from novamercado.servicio.estado import Estado
 
 log = logging.getLogger("novamercado.servicio")
@@ -215,3 +217,68 @@ async def prediccion(request: Request):
 async def observaciones(request: Request):
     """Ventas reales de un día para una tienda. Reenviar lo mismo no duplica (registros_guardados = 0)."""
     return await run_in_threadpool(_observar, _estado(request), await request.body())
+
+
+# --- Administración: reentrenamiento (D15, D16, D19)
+
+def _reentrenar(est: Estado):
+    try:
+        with repositorio.conectar(est.cfg.db_url) as con:
+            # Un candado en la base serializa dos POST simultáneos: el segundo ve la ejecución del primero.
+            con.execute("SELECT pg_advisory_lock(%s)", (repositorio.CANDADO_REENTRENAR,))
+            try:
+                actual = est.airflow.en_curso()
+                if actual is not None:  # D16: no se encola otra; se devuelve la que está en curso
+                    repositorio.nuevo_reentrenamiento(con, actual)
+                    return JSONResponse(status_code=202, content={"id": actual, "estado": "en_curso",
+                                                                  "ya_estaba_en_curso": True})
+                run_id = f"reentrenamiento-{uuid.uuid4().hex[:12]}"
+                est.airflow.disparar(run_id)
+                repositorio.nuevo_reentrenamiento(con, run_id)
+                return JSONResponse(status_code=202, content={"id": run_id, "estado": "en_curso"})
+            finally:
+                con.execute("SELECT pg_advisory_unlock(%s)", (repositorio.CANDADO_REENTRENAR,))
+    except ErrorAirflow as e:
+        return _error(503, f"no se puede iniciar el reentrenamiento: {e}")
+    except psycopg.Error as e:
+        return _error(503, f"la base de datos no está disponible ({type(e).__name__})")
+
+
+def _estado_reentrenamiento(est: Estado, run_id: str):
+    try:
+        with repositorio.conectar(est.cfg.db_url) as con:
+            fila = repositorio.reentrenamiento(con, run_id)
+    except psycopg.Error as e:
+        return _error(503, f"la base de datos no está disponible ({type(e).__name__})")
+    if fila and fila["estado"] in ("exitoso", "fallido"):
+        return fila
+    try:
+        en_airflow = est.airflow.estado(run_id)
+    except ErrorAirflow:
+        en_airflow = "desconocido"
+    if fila is None and en_airflow in (None, "desconocido"):
+        return _error(404, f"no existe la ejecución de reentrenamiento '{run_id}'")
+    if en_airflow == "fallido":  # el callback todavía no escribió el resultado
+        version = est.modelo.version if est.modelo else None
+        return {"estado": "fallido", "promovido": False, "version": version,
+                "motivo": "la ejecución falló en Airflow; el modelo vigente no cambió"}
+    if en_airflow == "exitoso":  # la última tarea escribe antes de terminar; releer por si acaso
+        with repositorio.conectar(est.cfg.db_url) as con:
+            fila = repositorio.reentrenamiento(con, run_id)
+        if fila and fila["estado"] == "exitoso":
+            return fila
+    return {"estado": "en_curso"}
+
+
+@app.post("/admin/reentrenar", status_code=202,
+          responses={202: {"description": "Reentrenamiento iniciado (o el que ya estaba en curso)"},
+                     503: {"description": "No se puede iniciar"}})
+def reentrenar(request: Request):
+    """Dispara el DAG de reentrenamiento. Si ya hay uno en curso, devuelve su id (D16)."""
+    return _reentrenar(_estado(request))
+
+
+@app.get("/admin/reentrenar/{run_id}", responses={404: {"description": "id desconocido"}})
+def estado_reentrenamiento(run_id: str, request: Request):
+    """Estado de una ejecución: en_curso, exitoso o fallido (con promovido, version y motivo al terminar)."""
+    return _estado_reentrenamiento(_estado(request), run_id)
