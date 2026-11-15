@@ -427,9 +427,113 @@ def test_promocion_previa_no_mira_fechas_posteriores(entorno):
     _, _, cfg, _ = entorno
     with repositorio.conectar(cfg.db_url) as con:
         sid = repositorio.registrar_solicitud(con, "prediccion", b"{}", 200)
-        con.execute("INSERT INTO predicciones (solicitud_id, tienda_id, fecha, familia_id, en_promocion, "
-                    "venta_esperada, cantidad_sugerida, version_modelo) VALUES (%s, 1, '2025-09-01', 'lacteos', "
-                    "17, 1, 1, '7')", (sid,))
+        con.execute(
+            "INSERT INTO predicciones (solicitud_id, tienda_id, fecha, familia_id, en_promocion, "
+            "venta_esperada, cantidad_sugerida, version_modelo) VALUES (%s, 1, '2025-09-01', 'lacteos', "
+            "17, 1, 1, '7')",
+            (sid,),
+        )
         from datetime import date
+
         assert repositorio.ultima_promocion(con, 1, "lacteos", date(2025, 7, 15)) != 17
         assert repositorio.ultima_promocion(con, 1, "lacteos", date(2025, 9, 2)) == 17
+
+
+# --- /admin/reentrenar con un Airflow simulado (D15, D16)
+
+
+class AirflowFalso:
+    def __init__(self):
+        self.corridas: dict[str, str] = {}
+        self.caido = False
+        self.disparos = 0
+
+    def _revisar(self):
+        if self.caido:
+            from novamercado.servicio.airflow import ErrorAirflow
+
+            raise ErrorAirflow("Airflow no disponible (ConnectError)")
+
+    def en_curso(self):
+        self._revisar()
+        return next((i for i, e in self.corridas.items() if e == "en_curso"), None)
+
+    def disparar(self, run_id):
+        self._revisar()
+        self.disparos += 1
+        self.corridas[run_id] = "en_curso"
+        return run_id
+
+    def estado(self, run_id):
+        self._revisar()
+        return self.corridas.get(run_id)
+
+
+def _con_airflow(estado):
+    falso = AirflowFalso()
+    estado.airflow = falso
+    return falso
+
+
+def test_reentrenar_responde_202_y_el_mismo_id_si_ya_hay_uno_en_curso(entorno):
+    cliente, estado, cfg, _ = entorno
+    af = _con_airflow(estado)
+    r1 = cliente.post("/admin/reentrenar")
+    assert r1.status_code == 202 and isinstance(r1.json()["id"], str)
+    r2 = cliente.post("/admin/reentrenar")
+    assert r2.status_code == 202 and r2.json()["id"] == r1.json()["id"] and af.disparos == 1
+    assert cliente.get(f"/admin/reentrenar/{r1.json()['id']}").json() == {"estado": "en_curso"}
+    af.corridas[r1.json()["id"]] = "exitoso"
+
+
+def test_estado_terminado_trae_promovido_version_y_motivo(entorno):
+    cliente, estado, cfg, _ = entorno
+    _con_airflow(estado)
+    rid = cliente.post("/admin/reentrenar").json()["id"]
+    from novamercado import reentrenamiento
+
+    reentrenamiento.registrar_resultado(cfg.db_url, rid, "exitoso", True, "4", "Costo en validación 1 vs 2 del vigente")
+    d = cliente.get(f"/admin/reentrenar/{rid}").json()
+    assert d == {
+        "estado": "exitoso",
+        "promovido": True,
+        "version": "4",
+        "motivo": "Costo en validación 1 vs 2 del vigente",
+    }
+    assert isinstance(d["version"], str)
+
+
+def test_fallo_en_airflow_sin_resultado_se_informa_como_fallido(entorno):
+    cliente, estado, *_ = entorno
+    af = _con_airflow(estado)
+    rid = cliente.post("/admin/reentrenar").json()["id"]
+    af.corridas[rid] = "fallido"
+    d = cliente.get(f"/admin/reentrenar/{rid}").json()
+    assert d["estado"] == "fallido" and d["promovido"] is False and d["version"] == estado.modelo.version
+
+
+def test_id_desconocido_es_404(entorno):
+    cliente, estado, *_ = entorno
+    _con_airflow(estado)
+    assert cliente.get("/admin/reentrenar/no-existe").status_code == 404
+
+
+def test_airflow_caido_responde_503(entorno):
+    cliente, estado, *_ = entorno
+    _con_airflow(estado).caido = True
+    r = cliente.post("/admin/reentrenar")
+    assert r.status_code == 503 and "Airflow" in r.json()["detail"]
+
+
+def test_reentrenar_simultaneo_dispara_una_sola_vez(entorno):
+    cliente, estado, *_ = entorno
+    af = _con_airflow(estado)
+    ids = []
+    hilos = [
+        threading.Thread(target=lambda: ids.append(cliente.post("/admin/reentrenar").json()["id"])) for _ in range(5)
+    ]
+    for h in hilos:
+        h.start()
+    for h in hilos:
+        h.join()
+    assert af.disparos == 1 and len(set(ids)) == 1

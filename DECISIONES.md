@@ -31,12 +31,13 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Modelo**
   - D13. Información que usa el modelo al predecir — *vigente*
   - D14. Cantidad sugerida: newsvendor por familia, calibrada por costo — *vigente*
-  - D15. Criterio de reemplazo del modelo vigente — *propuesta (F6)*
+  - D15. Criterio de reemplazo del modelo vigente — *vigente*
   - D22. Validación temporal común y escalera de modelos — *vigente*
   - D23. Guardas numéricas del modelo — *vigente*
   - D24. Qué se registra en MLflow y cómo se empaqueta el modelo — *vigente*
 - **Operación**
-  - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *propuesta (F6)*
+  - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *vigente*
+  - D26. Preparación de las ventas para reentrenar — *vigente*
   - D17. Recarga del modelo en caliente, caché local y monitor de salud — *vigente*
   - D25. La API lee el cuerpo crudo y nunca responde 500 por datos de entrada — *vigente*
 
@@ -144,6 +145,10 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - champion existe → nada que hacer;
   - no hay champion pero sí una versión con `origen=inicializador` (el proceso murió entre registrar y
     promover) → se promueve esa versión, sin reentrenar ni dejar versiones huérfanas;
+  - (F6) cada versión promovida queda con el tag `fue_champion`; si el alias se pierde, se restituye
+    la **última versión que fue champion**, venga del inicializador o de un reentrenamiento, y nunca
+    un candidato rechazado. Verificado: con v1 (inicial), v2 (rechazada) y v3 (promovida), al borrar el
+    alias el inicializador restituyó la v3 sin reentrenar;
   - no hay ninguna versión (primer arranque, o se perdió el volumen de MLflow aunque la base siga) →
     se entrena la escalera, se registra y se promueve;
   - MLflow no responde → con marca, termina bien (hubo modelo y la API usa su caché, D17) tras 4
@@ -219,12 +224,7 @@ indicada y se actualiza con números medidos en ese mismo PR.
   reproducir un caso nuevo como prueba. `en_promocion` de cada predicción es el dato que el
   reentrenamiento necesita para las fechas sin histórico (las observaciones no lo traen). El reloj
   del sistema solo aparece en columnas de auditoría (`recibido_en`, `cargado_en`), nunca en reglas.
-- **Pendiente para F6:** las ventas atípicas se guardan (no se inventa ni se descarta un dato real),
-  pero la observación queda con la regla `ventas_atipicas` en `correcciones`; el reentrenamiento
-  debe excluirlas o recortarlas para que un error de captura (p. ej. 99 999) no deforme el modelo.
-  Además, las observaciones de días sin solicitud de pronóstico quedan con `en_promocion` NULL en
-  `lectura.SQL_VENTAS`: el reentrenamiento debe imputarlas con la última promoción conocida (D9) o
-  excluirlas.
+- **Ventas atípicas y promociones faltantes al reentrenar:** resuelto en D26.
 
 ### D21. Pruebas de base de datos contra un Postgres real, cada una en un esquema propio
 - **Decisión:** las pruebas de carga e idempotencia corren contra Postgres 16.15 (en GitHub Actions
@@ -499,11 +499,57 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   las clases propias sin una lista de tipos de confianza).
 
 ### D15. Criterio de reemplazo del modelo vigente
-- **Propuesta:** el retador se entrena con datos anteriores a una ventana común de validación (los
-  últimos 28 días con observaciones). El vigente se mide en la misma ventana con sus predicciones
-  registradas (si cubren al menos el 80 %) o evaluando su artefacto. Se promueve si su costo es al
-  menos 1 % menor y pasa las verificaciones de sanidad; el alias `champion` solo se mueve al final y
-  un fallo nunca lo toca.
+- **Decisión** (`src/novamercado/reentrenamiento.py`, DAG `reentrenamiento`): el retador y el vigente
+  se comparan con el costo de `costos.csv` **solo en los días posteriores al corte del vigente**
+  (máximo 28), donde los dos están fuera de muestra, y con los factores de cantidad elegidos de la
+  misma forma (con datos anteriores a esos días):
+  - retador: un modelo de la misma receta entrenado solo con las filas anteriores a esos días
+    (`entrenar(..., comparar_desde=...)`), con factores de su validación anterior a esos días;
+  - vigente: su artefacto predice las mismas filas un día a la vez con las ventas reales hasta el día
+    anterior, con sus factores (elegidos al entrenarse, antes de su corte).
+  Reglas: (1) con menos de **7 días** nuevos no se compara y se conserva el vigente; (2) si no, se
+  promueve **salvo que el retador cueste más de 2 % más** que el vigente (no inferioridad); (3) si el
+  vigente no puede predecir, se promueve el retador; (4) sin vigente, se promueve el retador. El
+  modelo promovido es el retador entrenado con **todas** las filas (incluidos los días comparados).
+- **Por qué no inferioridad:** con la misma receta, el retador solo agrega datos más recientes; en los
+  días comparados ambos modelos vieron casi lo mismo y tienden a empatar. La comparación protege
+  contra regresiones (datos corruptos, un error) y la no inferioridad deja entrar los datos nuevos,
+  que es lo que se necesita cuando cambia la demanda. Exigir "mejor por 1 %" bloqueaba casi todos los
+  reentrenamientos.
+- **El alias solo se mueve al final**: el retador se registra antes como versión candidata sin alias;
+  en `decidir` primero se escriben los tags `decision` y `motivo`, luego se mueve el alias y al final se
+  registra el resultado. Si algo falla, la ejecución queda `fallido` y el motivo dice si el alias
+  cambió (si ya apuntaba al retador, `promovido: true`).
+- **Alternativas:** (a) los últimos 28 días aunque se superpongan con el entrenamiento del vigente
+  (primera versión de F6, ver abajo); (b) comparar con las cantidades que sirvió el vigente (tabla
+  `predicciones`): solo existen para días con solicitud y con la promoción que llegó; (c) promover
+  siempre el más nuevo (sin protección contra regresiones).
+- **Error de la primera versión (revisión del PR #7):** la ventana eran los últimos 28 días; el vigente
+  se evaluaba dentro de muestra en los días que ya había visto y el retador fuera. Con 7 días operados
+  a +35 % no promovía (103 458 vs 98 998, −4,5 %, medido por el revisor) aunque el vigente sirvió esos
+  días con sesgo −17,3 %; en la simulación de F7 pasó lo mismo a los 28 días (96 233 vs 95 611).
+- **Medido (F6, Docker, desde cero):**
+  - Sin días nuevos: "solo hay 0 días de ventas posteriores al corte del vigente (v1); se necesitan 7…":
+    no se promueve (44 s).
+  - 7 días (2026-03-01 a 07) operados por la API con +35 % de demanda: "Costo en validación 49 355 vs
+    49 541 del vigente (v1; −0.4 %; 7 días posteriores a su corte)": se promueve la v3, que ya incluye
+    esos 7 días (45 s). Antes del arreglo, el mismo escenario no promovía.
+  - Con MLflow detenido a mitad: `fallido` con el motivo real; el champion no cambió y las predicciones
+    respondieron 200.
+  - Cada reentrenamiento: 44–48 s (límite 10 min; `dagrun_timeout` 10 min, `execution_timeout` 9).
+
+### D26. Preparación de las ventas para reentrenar
+- **Decisión** (`modelo/preparacion.py`, dentro de `entrenar`): (1) una observación mayor a 3 veces el
+  máximo histórico de su familia (la misma regla que la advertencia `ventas_atipicas`) se conserva en
+  la base pero no entra al entrenamiento; (2) las observaciones no traen `en_promocion`: se toma de la
+  solicitud de pronóstico del día y, si no hubo, se imputa con la última promoción conocida de la serie
+  (D9), o 0. Lo hecho queda en el linaje de la tanda (`filas_atipicas_excluidas`,
+  `promociones_imputadas`).
+- **Alternativas:** recortar las atípicas al tope (sigue metiendo un valor inventado); dejar la
+  promoción en NaN (el modelo la trataría como "desconocida", distinto de lo que verá al predecir).
+- **Justificación:** no se descarta un dato real de la base (D8), pero un error de captura no debe
+  deformar el modelo; y al predecir siempre hay una promoción (la de la solicitud o la imputada por
+  D9), así que el entrenamiento debe verla igual.
 
 ## Operación
 
@@ -514,6 +560,13 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
 - **Alternativas:** responder 503; encolar una ejecución nueva.
 - **Justificación:** el cliente obtiene un `id` válido cuyo resultado incluye los datos que envió;
   encolar duplicaría el trabajo sobre los mismos datos y alargaría el tiempo hasta tener el resultado.
+- **Implementación:** la API consulta en Airflow las ejecuciones `queued`/`running` del DAG y, si no
+  hay, dispara una con un id propio (`reentrenamiento-<12 hex>`, seguro en una URL). Un candado de
+  Postgres (`pg_advisory_lock`) serializa dos POST simultáneos: con 5 a la vez se dispara una sola
+  ejecución (hay prueba). El DAG además tiene `max_active_runs=1`. `GET /admin/reentrenar/{id}` lee el
+  resultado de la tabla `reentrenamientos` (lo escribe la última tarea o el registro del fallo) y, si
+  aún no terminó, el estado en Airflow; un id que no está ni en la base ni en Airflow responde 404.
+- **Medido (F6):** un segundo POST a los 2 s devolvió el mismo id con `"ya_estaba_en_curso": true`.
 
 ### D17. Recarga del modelo en caliente, caché local y monitor de salud
 - **Decisión** (`servicio/estado.py`): un hilo en segundo plano, cada 15 s, revisa en paralelo la

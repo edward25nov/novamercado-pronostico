@@ -23,6 +23,7 @@ from novamercado.datos import lectura
 from novamercado.modelo import entrenamiento
 from novamercado.modelo.pronosticador import ARCHIVO, Pronosticador
 from novamercado.servicio import dependencias, repositorio
+from novamercado.servicio.airflow import ClienteAirflow
 
 log = logging.getLogger(__name__)
 PAUSA_SIN_MODELO_S = 5.0
@@ -93,6 +94,7 @@ class Estado:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.cargador = Cargador(cfg)
+        self.airflow = ClienteAirflow(cfg)
         self.modelo: ModeloVigente | None = None
         self.motivo_sin_modelo = "el servicio está arrancando"
         self.catalogo: Catalogo | None = None

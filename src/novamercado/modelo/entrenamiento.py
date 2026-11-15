@@ -23,6 +23,7 @@ from novamercado.datos.lectura import Catalogos
 from novamercado.modelo import costos as C
 from novamercado.modelo import evaluacion as E
 from novamercado.modelo import modelos as M
+from novamercado.modelo import preparacion
 from novamercado.modelo import variables as V
 from novamercado.modelo.pronosticador import ARCHIVO, VERSION_FORMATO, EnvolturaPyfunc, Pronosticador
 
@@ -32,6 +33,7 @@ EXPERIMENTO = "novamercado-ventas"
 NOMBRE_MODELO = "novamercado-ventas"
 ALIAS = "champion"
 ALIAS_ANTERIOR = "anterior"
+TAG_FUE_CHAMPION = "fue_champion"
 N_VENTANAS = 4
 
 # Escalera (D22): todos con las mismas ventanas y filas. El de producción es fijo (D13): el más
@@ -62,6 +64,9 @@ class Resultado:
     candidatos: dict[str, Candidato]
     validacion: pd.DataFrame          # predicciones fuera de muestra del modelo de producción
     linaje: dict = field(default_factory=dict)
+    # Predicciones del modelo de producción entrenado solo con filas anteriores a `comparar_desde`
+    # (para el criterio de reemplazo, D15): días posteriores al corte del vigente.
+    comparacion: pd.DataFrame | None = None
 
     @property
     def produccion(self) -> Candidato:
@@ -86,9 +91,13 @@ def _evaluar(nombre, fabrica, X, y, ventas, vs, costos) -> tuple[Candidato, pd.S
     return cand, pred
 
 
-def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS) -> Resultado:
-    """Evalúa la escalera con validación temporal y entrena el modelo de producción con todo."""
-    ventas = ventas.reset_index(drop=True)
+def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS,
+             comparar_desde: pd.Timestamp | None = None) -> Resultado:
+    """Evalúa la escalera con validación temporal y entrena el modelo de producción con todo.
+
+    Con `comparar_desde`, además entrena el modelo de producción solo con filas anteriores a esa
+    fecha y predice las filas desde esa fecha (fuera de muestra), para compararlo con el vigente."""
+    ventas, preparado = preparacion.preparar(ventas)
     codigos = V.codigos_desde(cat.tiendas, cat.familias, cat.feriados)
     X = V.construir(ventas, ventas, cat.tiendas, cat.feriados, codigos)
     y = ventas["ventas"].to_numpy(dtype=float)
@@ -125,8 +134,16 @@ def entrenar(ventas: pd.DataFrame, cat: Catalogos, n_ventanas: int = N_VENTANAS)
         "filas_observacion": int((ventas.get("origen") == "observacion").sum()) if "origen" in ventas else 0,
         "huella_ventas": str(pd.util.hash_pandas_object(
             ventas[["tienda_id", "familia_id", "fecha", "ventas"]], index=False).sum()),
+        **preparado,
     }
-    return Resultado(Pronosticador(modelo, codigos, prod.factores, info), candidatos, validacion, linaje)
+    comparacion = None
+    if comparar_desde is not None and (ventas["fecha"] >= comparar_desde).any():
+        antes = (ventas["fecha"] < comparar_desde).to_numpy()
+        m = ESCALERA[PRODUCCION]().ajustar(X[antes], y[antes], ventas["fecha"][antes])
+        comparacion = ventas.loc[~antes, ["tienda_id", "familia_id", "fecha", "ventas", "en_promocion"]].assign(
+            venta_esperada=m.predecir(X[~antes]))
+    return Resultado(Pronosticador(modelo, codigos, prod.factores, info), candidatos, validacion, linaje,
+                     comparacion)
 
 
 def _registrar_candidato(cand: Candidato):
@@ -201,12 +218,13 @@ def version_vigente(tracking_uri: str) -> str | None:
     return actual[0] if actual else None
 
 
-def ultima_version(tracking_uri: str, origen: str | None = None) -> str | None:
-    """Versión registrada más reciente (opcionalmente con el tag `origen`), o None."""
+def ultima_version(tracking_uri: str, origen: str | None = None, tag: tuple[str, str] | None = None) -> str | None:
+    """Versión registrada más reciente (opcionalmente con el tag `origen` o con otro tag), o None."""
     mlflow.set_tracking_uri(tracking_uri)
     filtro = f"name='{NOMBRE_MODELO}'"
     versiones = [v for v in MlflowClient().search_model_versions(filtro)
-                 if origen is None or v.tags.get("origen") == origen]
+                 if (origen is None or v.tags.get("origen") == origen)
+                 and (tag is None or v.tags.get(tag[0]) == tag[1])]
     return str(max(int(v.version) for v in versiones)) if versiones else None
 
 
@@ -218,6 +236,8 @@ def promover(tracking_uri: str, version: str) -> None:
     if previa and previa != version:
         cliente.set_registered_model_alias(NOMBRE_MODELO, ALIAS_ANTERIOR, previa)
     cliente.set_registered_model_alias(NOMBRE_MODELO, ALIAS, version)
+    # Marca permanente: si el alias se pierde, se recupera la última versión que fue champion (D5).
+    cliente.set_model_version_tag(NOMBRE_MODELO, version, TAG_FUE_CHAMPION, "true")
 
 
 def descargar(tracking_uri: str, version: str, destino: Path) -> Pronosticador:
