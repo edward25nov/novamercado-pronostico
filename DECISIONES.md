@@ -38,6 +38,7 @@ indicada y se actualiza con números medidos en ese mismo PR.
 - **Operación**
   - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *vigente*
   - D26. Preparación de las ventas para reentrenar — *vigente*
+  - D27. Simulación de la operación antes de la entrega — *vigente*
   - D17. Recarga del modelo en caliente, caché local y monitor de salud — *vigente*
   - D25. La API lee el cuerpo crudo y nunca responde 500 por datos de entrada — *vigente*
 
@@ -511,6 +512,9 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   promueve **salvo que el retador cueste más de 2 % más** que el vigente (no inferioridad); (3) si el
   vigente no puede predecir, se promueve el retador; (4) sin vigente, se promueve el retador. El
   modelo promovido es el retador entrenado con **todas** las filas (incluidos los días comparados).
+- **Ritmo:** tras una promoción, el nuevo vigente tiene corte en el último día con ventas, así que el
+  siguiente reentrenamiento necesita al menos 7 días nuevos de observaciones para poder compararse;
+  antes de eso responde `exitoso` sin promover y el motivo lo explica.
 - **Por qué no inferioridad:** con la misma receta, el retador solo agrega datos más recientes; en los
   días comparados ambos modelos vieron casi lo mismo y tienden a empatar. La comparación protege
   contra regresiones (datos corruptos, un error) y la no inferioridad deja entrar los datos nuevos,
@@ -613,3 +617,37 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   transacción). Las respuestas a los ejemplos publicados y a 8 casos fuera del catálogo están en
   `evidencia/respuestas_api.md` (`scripts/enviar_ejemplos.py`).
 
+## Validación de la operación
+
+### D27. Simulación de la operación antes de la entrega
+- **Decisión:** `scripts/simular_operacion.py` reproduce el programa de evaluación sobre el producto
+  levantado desde cero: cada día las observaciones del día anterior (antes de las solicitudes), una
+  solicitud de pronóstico por tienda (30 % con problemas generados al azar en 13 tipos, no solo los del
+  catálogo), un reentrenamiento cada 14 días por `/admin/reentrenar`, un cambio de demanda (bebidas y
+  snacks +35 %, carnes −25 %, abarrotes +15 % desde el 2026-03-29), MLflow detenido 3 días y un
+  `docker compose down` + `up` sin borrar volúmenes. Las ventas "reales" se generan con el mismo día de
+  la semana del año anterior × 1,10 × cambio × ruido de Poisson. El costo se compara con una regla
+  ingenua: sugerir lo vendido el mismo día de la semana anterior.
+- **Resultado** (2026-03-01 a 2026-04-25, 56 días, 5,6 min; `evidencia/simulacion.md` y `.json`):
+  - 1084 solicitudes: **0 respuestas 5xx** y **0 errores de contrato** en las
+    respuestas 200 (campos, tipos, `estado` coherente con las acciones, cantidades enteras ≥ 0).
+  - Las 40 respuestas 422 corresponden a las solicitudes sin tienda o fecha establecible (tienda
+    inexistente, fecha imposible, cuerpo roto); cada tipo de problema recibió la política de D8 (tabla
+    por tipo en la evidencia).
+  - Costo de las cantidades sugeridas: **206 651** contra 402 341 de la regla
+    ingenua (**-48.6%**); entre −41 % y −62 % cada semana, también
+    después del cambio de demanda.
+  - 4 reentrenamientos (45–55 s), los 4 promovidos por no inferioridad (diferencias de −0,3 % a +0,1 %
+    en los 13–14 días posteriores al corte de cada vigente). Son empates esperables: con la misma
+    receta, el retador de comparación y el vigente vieron casi los mismos datos; la promoción deja
+    entrar los días nuevos al modelo servido. Un retador más de 2 % peor se rechaza (D15).
+  - Reproducibilidad: el revisor repitió la simulación desde cero en otro proyecto de Compose y obtuvo
+    los mismos códigos de respuesta (507/40/537), 0 5xx, 0 errores de contrato, los mismos 4
+    reentrenamientos con los mismos costos y un costo total de 207 407 (+0,4 %); la variación entre
+    corridas es de ±0,5 % (orden de llegada de las solicitudes y promociones imputadas).
+  - MLflow detenido → `degradado` a los 4 s; de vuelta → `ok` a los 5 s. `down` + `up` → `ok` a los 25 s.
+  - La única advertencia sobre una solicitud válida fue correcta: la tienda 10 abrió el 2025-03-15, así
+    que la simulación no tiene sus ventas antes del 2026-03-14 y la API avisó que pronosticaba con la
+    última venta conocida (2026-02-28).
+- **Limitación:** las ventas futuras son sintéticas (derivadas del año anterior); la simulación verifica
+  la operación y la coherencia del ciclo, no el desempeño exacto en el periodo de evaluación.

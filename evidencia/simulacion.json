@@ -1,0 +1,121 @@
+{
+  "periodo": "2026-03-01..2026-04-25",
+  "minutos": 5.6,
+  "codigos": {
+    "pred 200": 507,
+    "pred 422": 40,
+    "obs 200": 537
+  },
+  "respuestas_5xx": 0,
+  "errores_de_contrato": 0,
+  "costo_total": 206651,
+  "costo_ingenuo": 402341,
+  "cambio_de_demanda": {
+    "desde": "2026-03-29",
+    "bebidas": 1.35,
+    "snacks": 1.35,
+    "carnes": 0.75,
+    "abarrotes": 1.15
+  },
+  "eventos": [
+    {
+      "dia": "2026-03-21",
+      "evento": "MLflow detenido",
+      "segundos_hasta_degradado": 4.0261594999997214
+    },
+    {
+      "dia": "2026-03-24",
+      "evento": "MLflow de vuelta",
+      "segundos_hasta_ok": 5.029436040999826
+    },
+    {
+      "dia": "2026-04-05",
+      "evento": "down + up (volúmenes conservados)",
+      "segundos_hasta_ok": 25
+    }
+  ],
+  "reentrenamientos": [
+    {
+      "dia": "2026-03-14",
+      "id": "reentrenamiento-3c0e03961a71",
+      "estado": "exitoso",
+      "promovido": true,
+      "version": "2",
+      "motivo": "Costo en validación 40 807 vs 40 755 del vigente (v1; +0.1%; 13 días posteriores a su corte: 2026-03-01..2026-03-13)",
+      "segundos": 55
+    },
+    {
+      "dia": "2026-03-28",
+      "id": "reentrenamiento-bc3a90163df4",
+      "estado": "exitoso",
+      "promovido": true,
+      "version": "3",
+      "motivo": "Costo en validación 50 310 vs 50 324 del vigente (v2; -0.0%; 14 días posteriores a su corte: 2026-03-14..2026-03-27)",
+      "segundos": 45
+    },
+    {
+      "dia": "2026-04-11",
+      "id": "reentrenamiento-90ca59f2dbf3",
+      "estado": "exitoso",
+      "promovido": true,
+      "version": "4",
+      "motivo": "Costo en validación 63 706 vs 63 731 del vigente (v3; -0.0%; 14 días posteriores a su corte: 2026-03-28..2026-04-10)",
+      "segundos": 50
+    },
+    {
+      "dia": "2026-04-25",
+      "id": "reentrenamiento-49638e9bf6ba",
+      "estado": "exitoso",
+      "promovido": true,
+      "version": "5",
+      "motivo": "Costo en validación 61 990 vs 62 173 del vigente (v4; -0.3%; 14 días posteriores a su corte: 2026-04-11..2026-04-24)",
+      "segundos": 50
+    }
+  ],
+  "por_tipo_de_solicitud": {
+    "valida": {
+      "ok": 358,
+      "advertencia": 1
+    },
+    "cuerpo_roto": {
+      "422": 11
+    },
+    "tienda_inexistente": {
+      "422": 17
+    },
+    "campo_renombrado": {
+      "corregido": 11
+    },
+    "fecha_formato": {
+      "corregido": 13,
+      "advertencia": 2
+    },
+    "promo_texto": {
+      "corregido": 16
+    },
+    "familia_forma": {
+      "corregido": 14
+    },
+    "fecha_imposible": {
+      "422": 12
+    },
+    "tienda_texto": {
+      "corregido": 18
+    },
+    "faltan_familias": {
+      "advertencia": 19
+    },
+    "promo_invalida": {
+      "advertencia": 15
+    },
+    "campo_extra": {
+      "advertencia": 18
+    },
+    "familia_repetida": {
+      "advertencia": 13
+    },
+    "familia_desconocida": {
+      "advertencia": 9
+    }
+  }
+}

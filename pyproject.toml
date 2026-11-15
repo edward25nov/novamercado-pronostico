@@ -13,3 +13,7 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts de informes: f-strings largas de Markdown
+"scripts/*" = ["E501"]
