@@ -25,6 +25,9 @@ x-airflow-comun: &airflow-comun
     OMP_NUM_THREADS: 4
     PYTHONPATH: /opt/novamercado/src
     MLFLOW_TRACKING_URI: http://mlflow:5000
+    # Con MLflow caído, fallar en segundos y no tras minutos de reintentos (D28).
+    MLFLOW_HTTP_REQUEST_MAX_RETRIES: 2
+    MLFLOW_HTTP_REQUEST_TIMEOUT: 20
     # config.py arma la URL de la base del producto desde estas partes (codificando la clave).
     PRODUCTO_DB_HOST: db
     PRODUCTO_DB_USUARIO: ${PRODUCTO_DB_USUARIO:?definir en .env}
@@ -98,6 +101,8 @@ services:
       PRODUCTO_DB_CLAVE: ${PRODUCTO_DB_CLAVE:?definir en .env}
       PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: 2
+      MLFLOW_HTTP_REQUEST_TIMEOUT: 20
       NOVAMERCADO_DATOS: /datos/publicados
       OMP_NUM_THREADS: 4
     volumes:
@@ -121,6 +126,8 @@ services:
       PRODUCTO_DB_CLAVE: ${PRODUCTO_DB_CLAVE:?definir en .env}
       PRODUCTO_DB_NOMBRE: ${PRODUCTO_DB_NOMBRE:?definir en .env}
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: 2
+      MLFLOW_HTTP_REQUEST_TIMEOUT: 20
       AIRFLOW_URL: http://airflow-apiserver:8080
       AIRFLOW_USUARIO: ${AIRFLOW_ADMIN_USUARIO:?definir en .env}
       AIRFLOW_CLAVE: ${AIRFLOW_ADMIN_CLAVE:?definir en .env}

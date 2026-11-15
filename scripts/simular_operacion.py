@@ -160,9 +160,10 @@ def main() -> None:
     ap.add_argument("--sin-eventos", action="store_true", help="no detener MLflow ni reiniciar el producto")
     ap.add_argument("--semilla", type=int, default=7)
     ap.add_argument("--proyecto", help="proyecto de Compose sobre el que actúan los eventos (por defecto, el del .yml)")
-    ap.add_argument("--compose-file", help="archivo de Compose (por defecto, docker-compose.yml de la raíz)")
+    ap.add_argument("--compose-file", action="append", default=[],
+                    help="archivo de Compose; se puede repetir (base y override), como `docker compose -f`")
     a = ap.parse_args()
-    PROYECTO.extend((["-p", a.proyecto] if a.proyecto else []) + (["-f", a.compose_file] if a.compose_file else []))
+    PROYECTO.extend((["-p", a.proyecto] if a.proyecto else []) + [x for f in a.compose_file for x in ("-f", f)])
 
     rng, nrng = random.Random(a.semilla), np.random.default_rng(a.semilla)
     h = pd.read_csv(Path(a.datos) / "historico_ventas.csv", parse_dates=["fecha"])

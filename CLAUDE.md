@@ -79,7 +79,8 @@ enunciado, resumido abajo.
   sin programación, se dispara con `POST /admin/reentrenar`; `max_active_runs=1`, 10 minutos máximo.
 - `docker/`: Dockerfiles. `docker-compose.yml` en la raíz (proyecto `novamercado`).
 - `tests/`: pruebas con pytest (corren en cada PR con GitHub Actions).
-- `scripts/`: utilidades (perfil de datos, simulador de operación).
+- `scripts/`: `perfilar_datos.py`, `comparar_modelos.py`, `enviar_ejemplos.py`, `simular_operacion.py`
+  (reproduce la evaluación) y `exportar_evidencia.py` (MLflow y Airflow → `evidencia/`).
 - `docs/`: perfil de datos y documentación de apoyo. `evidencia/`: capturas y respuestas de ejemplo.
 - `datos/publicados/`: archivos del GES (no versionados).
 

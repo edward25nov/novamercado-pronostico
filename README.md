@@ -4,7 +4,7 @@ Servicio de pronóstico diario de ventas por familia de producto para las tienda
 (Laboratorio 2, Product Development). Integra FastAPI, PostgreSQL, MLflow y Apache Airflow, y se
 levanta con un solo comando.
 
-> Estado: F7 (simulación de la operación); falta la evidencia final y el tag de entrega.
+> Entrega: tag `entrega-lab2`. Decisiones en `DECISIONES.md`; evidencia de funcionamiento en `evidencia/`.
 
 ## Requisitos
 - Docker Desktop (o Docker Engine) con Compose v2, con al menos 4 GB de memoria para Docker.
@@ -64,7 +64,8 @@ MLflow y reinicio del producto) y escribe `evidencia/simulacion.md`:
 ```
 
 Los eventos (detener MLflow, `down` + `up`) actúan sobre el proyecto de Compose `novamercado`. Para
-simular contra otro stack, pasar `--url` y también `--proyecto` (y `--compose-file` si corresponde).
+simular contra otro stack, pasar `--url` y también `--proyecto` (y `--compose-file`, repetible, si
+corresponde).
 
 Detener sin perder datos: `docker compose down` (los volúmenes se conservan). Borrar todo, incluidos
 los datos del producto, MLflow y Airflow: `docker compose down -v`.
@@ -96,6 +97,16 @@ export NOVAMERCADO_TEST_DB_URL=postgresql://postgres:pruebas@localhost:55432/pos
 .venv/bin/pytest -q
 .venv/bin/python scripts/perfilar_datos.py   # regenera docs/perfil_datos.md
 ```
+
+## Evidencia de funcionamiento (`evidencia/`)
+Generada contra el producto levantado desde cero:
+- `simulacion.md` / `.json`: 56 días de operación simulada (solicitudes con problemas, reentrenamientos,
+  cambio de demanda, caída de MLflow, `down` + `up`), con códigos de respuesta, costo y eventos.
+- `mlflow.md`: experimento, tandas con su linaje, escalera de modelos y versiones del Model Registry con
+  aliases, decisión y motivo (`scripts/exportar_evidencia.py`).
+- `airflow.md`: ejecuciones del DAG `reentrenamiento` (exitosas, sin promoción y fallida) con sus tareas.
+- `respuestas_api.md`: respuestas de la API a los ejemplos publicados y a casos fuera del catálogo
+  (`scripts/enviar_ejemplos.py`).
 
 ## Documentación
 - `DECISIONES.md`: decisiones técnicas y de producto, con alternativas y justificación.
