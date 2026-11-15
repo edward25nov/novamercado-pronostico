@@ -39,6 +39,7 @@ indicada y se actualiza con números medidos en ese mismo PR.
   - D16. Reentrenamiento pedido con otro en curso: 202 con el id del que está en curso — *vigente*
   - D26. Preparación de las ventas para reentrenar — *vigente*
   - D27. Simulación de la operación antes de la entrega — *vigente*
+  - D28. El cliente de MLflow falla rápido cuando MLflow no responde — *vigente*
   - D17. Recarga del modelo en caliente, caché local y monitor de salud — *vigente*
   - D25. La API lee el cuerpo crudo y nunca responde 500 por datos de entrada — *vigente*
 
@@ -628,16 +629,16 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
   `docker compose down` + `up` sin borrar volúmenes. Las ventas "reales" se generan con el mismo día de
   la semana del año anterior × 1,10 × cambio × ruido de Poisson. El costo se compara con una regla
   ingenua: sugerir lo vendido el mismo día de la semana anterior.
-- **Resultado** (2026-03-01 a 2026-04-25, 56 días, 5,6 min; `evidencia/simulacion.md` y `.json`):
+- **Resultado** (2026-03-01 a 2026-04-25, 56 días, ~6 min; corrida final de F8; `evidencia/simulacion.md` y `.json`):
   - 1084 solicitudes: **0 respuestas 5xx** y **0 errores de contrato** en las
     respuestas 200 (campos, tipos, `estado` coherente con las acciones, cantidades enteras ≥ 0).
   - Las 40 respuestas 422 corresponden a las solicitudes sin tienda o fecha establecible (tienda
     inexistente, fecha imposible, cuerpo roto); cada tipo de problema recibió la política de D8 (tabla
     por tipo en la evidencia).
-  - Costo de las cantidades sugeridas: **206 651** contra 402 341 de la regla
-    ingenua (**-48.6%**); entre −41 % y −62 % cada semana, también
+  - Costo de las cantidades sugeridas: **207 518** contra 402 341 de la regla
+    ingenua (**−48,4 %**); entre −41 % y −62 % cada semana, también
     después del cambio de demanda.
-  - 4 reentrenamientos (45–55 s), los 4 promovidos por no inferioridad (diferencias de −0,3 % a +0,1 %
+  - 4 reentrenamientos (50–55 s), los 4 promovidos por no inferioridad (diferencias de −0,3 % a +0,1 %
     en los 13–14 días posteriores al corte de cada vigente). Son empates esperables: con la misma
     receta, el retador de comparación y el vigente vieron casi los mismos datos; la promoción deja
     entrar los días nuevos al modelo servido. Un retador más de 2 % peor se rechaza (D15).
@@ -645,9 +646,21 @@ registrado en `correcciones`). Esta tabla y el código cambian en el mismo PR.
     los mismos códigos de respuesta (507/40/537), 0 5xx, 0 errores de contrato, los mismos 4
     reentrenamientos con los mismos costos y un costo total de 207 407 (+0,4 %); la variación entre
     corridas es de ±0,5 % (orden de llegada de las solicitudes y promociones imputadas).
-  - MLflow detenido → `degradado` a los 4 s; de vuelta → `ok` a los 5 s. `down` + `up` → `ok` a los 25 s.
+  - MLflow detenido → `degradado` a los 1–4 s; de vuelta → `ok` a los 5–11 s. `down` + `up` → `ok` a los
+    25–26 s (dos corridas).
   - La única advertencia sobre una solicitud válida fue correcta: la tienda 10 abrió el 2025-03-15, así
     que la simulación no tiene sus ventas antes del 2026-03-14 y la API avisó que pronosticaba con la
     última venta conocida (2026-02-28).
 - **Limitación:** las ventas futuras son sintéticas (derivadas del año anterior); la simulación verifica
   la operación y la coherencia del ciclo, no el desempeño exacto en el periodo de evaluación.
+
+### D28. El cliente de MLflow falla rápido cuando MLflow no responde
+- **Decisión:** en Airflow, la API y el inicializador, `MLFLOW_HTTP_REQUEST_MAX_RETRIES=2` y
+  `MLFLOW_HTTP_REQUEST_TIMEOUT=20` (docker-compose.yml).
+- **Por qué (medido):** con los valores por defecto, un reentrenamiento con MLflow detenido a mitad
+  tardó **548 s** en fallar (reintentos con espera creciente), casi en el `execution_timeout` de 9
+  minutos. Con el cambio falló a los **40 s**, con el motivo real, el champion sin cambios y las
+  predicciones respondiendo 200. El arranque desde cero no se ve afectado: el inicializador espera a
+  MLflow con su propio bucle (D5) y llegó a `ok` en 49 s.
+- **Alternativas:** dejar los valores por defecto (cumple los 10 minutos, pero sin margen y con el
+  reentrenamiento ocupado casi 10 minutos por una dependencia caída).
